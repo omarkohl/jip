@@ -1,7 +1,7 @@
 # jip
 
-**jip** is a CLI tool for managing stacked pull requests using
-[jj (Jujutsu)](https://github.com/jj-vcs/jj) and GitHub.
+**jip** is a CLI tool for managing stacked (or normal) pull requests using [jj
+(Jujutsu)](https://github.com/jj-vcs/jj) and GitHub.
 
 Each commit is a self-contained, atomic unit of change that gets its own pull
 request. When you update a PR, jip posts a comment showing what you changed
