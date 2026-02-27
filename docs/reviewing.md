@@ -73,7 +73,7 @@ stack so the next PR targets the base branch directly.
 The other merge strategies work but have downsides:
 
 - **"Create a merge commit"** could produce duplicate commits in the history,
-- which is technically unproblematic but makes the history harder to read.
+  which is technically unproblematic but makes the history harder to read.
 - **"Squash and merge"** rewrites the commit message. Since each PR is already
   a single polished commit, squashing discards the carefully written message
   and replaces it with GitHub's auto-generated one.
