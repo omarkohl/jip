@@ -245,11 +245,11 @@ directly. If you use Git, look at those tools instead.
 ## Development
 
 ```bash
-# Build (uses the dev version by default)
+# Build (shows "dev" with commit info from debug.BuildInfo)
 go build -o jip .
 
 # Build with a specific version
-go build -ldflags "-X github.com/omarkohl/jip/cmd.version=0.2.0" -o jip .
+go build -ldflags "-X github.com/omarkohl/jip/cmd.Version=0.2.0 -X github.com/omarkohl/jip/cmd.Commit=$(git rev-parse HEAD) -X github.com/omarkohl/jip/cmd.Date=$(date -u +%Y-%m-%d)" -o jip .
 
 # Unit tests
 go test ./...
