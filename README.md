@@ -244,23 +244,25 @@ directly. If you use Git, look at those tools instead.
 
 ## Development
 
+Run `make` to see available targets:
+
 ```bash
-# Build (shows "dev" with commit info from debug.BuildInfo)
-go build -o jip .
+make              # list targets
+make build        # build the binary
+make check        # run all checks (lint + tests)
+make test         # unit tests
+make test-integration  # integration tests (require jj)
+```
 
-# Build with a specific version
-go build -ldflags "-X github.com/omarkohl/jip/cmd.Version=0.2.0 -X github.com/omarkohl/jip/cmd.Commit=$(git rev-parse HEAD) -X github.com/omarkohl/jip/cmd.Date=$(date -u +%Y-%m-%d)" -o jip .
+Build with a specific version (for releases):
 
-# Unit tests
-go test ./...
+```bash
+make build VERSION=0.2.0
+```
 
-# Lint
-go vet ./...
-go tool -modfile=golangci-lint.mod golangci-lint run ./...
+### Integration test tips
 
-# Integration tests (require jj installed)
-go test -tags integration ./...
-
+```bash
 # Verbose output (shows jj log, resolved DAGs with parent info)
 go test -tags integration -v ./...
 

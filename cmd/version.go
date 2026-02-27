@@ -45,11 +45,14 @@ func buildVersion() string {
 		return Version
 	}
 
-	// Shorten the commit hash to 7 characters.
+	// Normalize: split off -dirty suffix, shorten hash, reattach.
+	if strings.HasSuffix(commit, "-dirty") {
+		dirty = true
+		commit = strings.TrimSuffix(commit, "-dirty")
+	}
 	if len(commit) > 7 {
 		commit = commit[:7]
 	}
-
 	if dirty {
 		commit += "-dirty"
 	}
