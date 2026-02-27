@@ -31,13 +31,8 @@ CLI tool for stacked PRs with jj (Jujutsu) and GitHub.
 
 ## Pre-commit checks
 
-Before committing, always run all of these and fix any issues:
-
-1. `go vet ./...`
-2. `gofmt -l .` (reformat with `gofmt -w .` if needed)
-3. `go tool -modfile=golangci-lint.mod golangci-lint run ./...`
-4. `go test ./...` (unit tests)
-5. `go test -tags=integration ./...` (integration tests)
+Before committing, run `make check` and fix any issues. Use `make fmt` to
+auto-format code.
 
 ## Code style
 
