@@ -33,6 +33,7 @@ func init() {
 	sendCmd.Flags().BoolP("draft", "d", false, "Create PRs as drafts")
 	sendCmd.Flags().BoolP("existing", "x", false, "Only update PRs that already exist (skip new ones)")
 	sendCmd.Flags().Bool("no-stack", false, "Send only the tip of each stack as a single PR")
+	sendCmd.Flags().Bool("rebase", false, "Rebase the stack onto the base branch before sending")
 }
 
 // sendOpts holds configuration for the send pipeline.
@@ -46,6 +47,7 @@ type sendOpts struct {
 	draft          bool
 	existing       bool
 	noStack        bool
+	rebase         bool
 	reviewers      []string
 	revsets        []string
 }
@@ -83,6 +85,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 	draft, _ := cmd.Flags().GetBool("draft")
 	existing, _ := cmd.Flags().GetBool("existing")
 	noStack, _ := cmd.Flags().GetBool("no-stack")
+	rebase, _ := cmd.Flags().GetBool("rebase")
 	w := cmd.OutOrStdout()
 
 	revsets := args
@@ -159,6 +162,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 		draft:          draft,
 		existing:       existing,
 		noStack:        noStack,
+		rebase:         rebase,
 		reviewers:      reviewers,
 		revsets:        revsets,
 	}, w)
@@ -176,6 +180,14 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		_, _ = fmt.Fprintf(w, "Fetching %s...\n", opts.upstreamRemote)
 		if err := runner.GitFetch(opts.upstreamRemote); err != nil {
 			return fmt.Errorf("fetching %s: %w", opts.upstreamRemote, err)
+		}
+	}
+
+	// Rebase onto base branch if requested.
+	if opts.rebase {
+		_, _ = fmt.Fprintf(w, "Rebasing onto %s...\n", opts.base)
+		if err := runner.Rebase(opts.revsets, opts.base); err != nil {
+			return fmt.Errorf("rebasing onto %s: %w", opts.base, err)
 		}
 	}
 

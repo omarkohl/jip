@@ -802,6 +802,80 @@ func TestIntegration_SendNoStack(t *testing.T) {
 	}
 }
 
+func TestIntegration_SendRebase(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	spy := &spyRunner{Runner: jj.NewRunner(repoDir)}
+
+	// Create a change on top of main.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: rebase test")
+
+	var buf bytes.Buffer
+	err := executeSend(spy, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+		rebase:  true,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send --rebase failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	// Verify rebase was called with the correct arguments.
+	if len(spy.rebaseCalls) != 1 {
+		t.Fatalf("expected 1 rebase call, got %d", len(spy.rebaseCalls))
+	}
+	rc := spy.rebaseCalls[0]
+	if len(rc.revsets) != 1 || rc.revsets[0] != "@-" {
+		t.Errorf("expected rebase revsets [@-], got %v", rc.revsets)
+	}
+	if rc.destination != "main" {
+		t.Errorf("expected rebase destination 'main', got %q", rc.destination)
+	}
+
+	// Output should mention rebasing.
+	if !strings.Contains(output, "Rebasing onto main") {
+		t.Errorf("expected 'Rebasing onto main' in output, got:\n%s", output)
+	}
+
+	// PR should still be created successfully.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected 1 PR, got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendNoRebaseByDefault(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	spy := &spyRunner{Runner: jj.NewRunner(repoDir)}
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: no rebase test")
+
+	var buf bytes.Buffer
+	err := executeSend(spy, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// Rebase should NOT have been called.
+	if len(spy.rebaseCalls) != 0 {
+		t.Errorf("expected 0 rebase calls without --rebase, got %d", len(spy.rebaseCalls))
+	}
+}
+
 func TestIntegration_SendSkipsBehindBookmark(t *testing.T) {
 	checkJJ(t)
 
@@ -985,11 +1059,17 @@ func writeFile(t *testing.T, dir, filename, content string) {
 	}
 }
 
-// spyRunner wraps a real Runner and records remotes passed to GitFetch/GitPush.
+// spyRunner wraps a real Runner and records remotes passed to GitFetch/GitPush/Rebase.
 type spyRunner struct {
 	jj.Runner
 	fetchRemotes []string
 	pushRemote   string
+	rebaseCalls  []rebaseCall
+}
+
+type rebaseCall struct {
+	revsets     []string
+	destination string
 }
 
 func (s *spyRunner) GitFetch(remote string) error {
@@ -1000,6 +1080,11 @@ func (s *spyRunner) GitFetch(remote string) error {
 func (s *spyRunner) GitPush(bookmarks []string, allowNew bool, remote string) error {
 	s.pushRemote = remote
 	return s.Runner.GitPush(bookmarks, allowNew, remote)
+}
+
+func (s *spyRunner) Rebase(revsets []string, destination string) error {
+	s.rebaseCalls = append(s.rebaseCalls, rebaseCall{revsets: revsets, destination: destination})
+	return s.Runner.Rebase(revsets, destination)
 }
 
 // --- Test helpers ---

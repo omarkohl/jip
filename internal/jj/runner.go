@@ -55,6 +55,9 @@ type Runner interface {
 
 	// Interdiff returns the diff between two revisions using jj interdiff --git.
 	Interdiff(from, to string) (string, error)
+
+	// Rebase rebases the given revsets onto the destination revision.
+	Rebase(revsets []string, destination string) error
 }
 
 // NewRunner creates a Runner that executes jj in the given repository directory.
@@ -164,6 +167,19 @@ func (r *realRunner) Interdiff(from, to string) (string, error) {
 		return "", fmt.Errorf("jj interdiff: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+func (r *realRunner) Rebase(revsets []string, destination string) error {
+	args := []string{"rebase", "-R", r.repoDir, "-d", destination}
+	for _, rev := range revsets {
+		args = append(args, "-b", rev)
+	}
+	cmd := exec.Command("jj", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("jj rebase: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // ParseRemoteList parses the output of jj git remote list into a map

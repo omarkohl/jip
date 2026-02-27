@@ -20,6 +20,7 @@
 | `--draft` | `-d` | | Create PRs as drafts |
 | `--existing` | `-x` | | Only update PRs that already exist (skip new ones) |
 | `--no-stack` | | | Send only the tip of each stack as a single PR |
+| `--rebase` | | | Rebase the stack onto the base branch before sending |
 
 ## Revsets
 
@@ -43,6 +44,18 @@ branches to your fork.
 # Push to your fork, open PRs against upstream
 jip send --upstream upstream
 ```
+
+## Rebasing before send (`--rebase`)
+
+Use `--rebase` to rebase the stack onto the base branch before pushing. This
+ensures PRs don't contain stale diffs when the base branch has moved forward.
+
+```bash
+jip send --rebase
+```
+
+This is equivalent to running `jj rebase` manually before `jip send`, but
+saves a step.
 
 ## Single PR for a stack (`--no-stack`)
 

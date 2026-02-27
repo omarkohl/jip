@@ -125,6 +125,9 @@ jj rebase -o main
 
 # Update all PRs (jip posts comments showing what changed)
 jip s prm vu
+
+# Or combine rebase + send in one step
+jip s --rebase prm vu
 ```
 
 The reformat PR is already merged, so jip skips it. The bugfix PR now targets
@@ -140,6 +143,9 @@ jj git fetch
 jj rebase -o main
 # Update all existing (-x/--existing) PRs for changes that are descendants of main
 jip s -x main::
+
+# Or combine rebase + send in one step
+jip s -x --rebase main::
 ```
 
 Now only the feature PR remains, targeting `main` directly. The stack
