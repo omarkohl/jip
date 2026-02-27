@@ -38,7 +38,7 @@ Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub
 Actions. Tag a version and push:
 
 ```bash
-jj tag v0.1.0
+jj tag set v0.1.0 -r main
 git push --tags
 ```
 
