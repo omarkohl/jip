@@ -1,0 +1,22 @@
+version: 2
+
+builds:
+  - ldflags:
+      - -X github.com/omarkohl/jip/cmd.Version={{.Version}}
+      - -X github.com/omarkohl/jip/cmd.Commit={{.ShortCommit}}
+      - -X github.com/omarkohl/jip/cmd.Date={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format_overrides:
+      - goos: windows
+        formats: [zip]
+
+changelog:
+  use: github-native

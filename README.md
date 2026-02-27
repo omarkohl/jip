@@ -242,6 +242,19 @@ directly. If you use Git, look at those tools instead.
 | Merge process | Normal GH UI | `ghstack land` | `git spr merge` | Own merge flow |
 | Reviewer interdiff | PR comments | Partial (no force-push) | No | Via SaaS |
 
+## Releasing
+
+Releases are automated with [GoReleaser](https://goreleaser.com/) via GitHub
+Actions. Tag a version and push:
+
+```bash
+jj tag v0.1.0
+git push --tags
+```
+
+This runs the full check suite, then builds binaries for Linux, macOS, and
+Windows (amd64 + arm64) and publishes a GitHub Release.
+
 ## Development
 
 Run `make` to see available targets:
