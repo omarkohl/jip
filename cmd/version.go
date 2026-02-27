@@ -28,6 +28,10 @@ func buildVersion() string {
 	// Fall back to debug.BuildInfo when ldflags are not set.
 	if commit == "" {
 		if info, ok := debug.ReadBuildInfo(); ok {
+			// go install ...@version sets Main.Version but not vcs.* settings.
+			if Version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+				Version = info.Main.Version
+			}
 			for _, s := range info.Settings {
 				switch s.Key {
 				case "vcs.revision":
