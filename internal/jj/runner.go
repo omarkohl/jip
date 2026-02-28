@@ -12,6 +12,7 @@ const logTemplate = "" +
 	`"\"change_id\":" ++ json(change_id) ++` +
 	`",\"commit_id\":" ++ json(commit_id) ++` +
 	`",\"description\":" ++ json(description.first_line()) ++` +
+	`",\"conflict\":" ++ if(conflict, "true", "false") ++` +
 	`",\"parent_ids\":[" ++ parents.map(|c| json(c.change_id())).join(",") ++ "]" ++` +
 	`",\"bookmarks\":[" ++ local_bookmarks.map(|r| json(r.name())).join(",") ++ "]" ++` +
 	`"}\n"`

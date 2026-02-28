@@ -12,6 +12,7 @@ type Change struct {
 	ChangeID    string   `json:"change_id"`
 	CommitID    string   `json:"commit_id"`
 	Description string   `json:"description"`
+	Conflict    bool     `json:"conflict"`
 	ParentIDs   []string `json:"parent_ids"`
 	Bookmarks   []string `json:"bookmarks"`
 }

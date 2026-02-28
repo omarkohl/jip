@@ -331,7 +331,11 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		if _, ok := skippedIDs[s.change.ChangeID]; ok {
 			continue // already marked via ancestor
 		}
-		if s.bookmark.Displaced {
+		if s.change.Conflict {
+			skippedIDs[s.change.ChangeID] = skipReason{
+				reason: "change has conflicts — resolve before sending",
+			}
+		} else if s.bookmark.Displaced {
 			skippedIDs[s.change.ChangeID] = skipReason{
 				reason: "remote is ahead of local — pull changes or reset the bookmark",
 			}
@@ -373,7 +377,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			printSkippedChanges(w, skippedStates, skippedIDs)
 		}
 		if len(skippedStates) > 0 {
-			return fmt.Errorf("%d change(s) skipped due to diverged or behind bookmarks", len(skippedStates))
+			return fmt.Errorf("%d change(s) skipped due to conflicts or diverged bookmarks", len(skippedStates))
 		}
 		return nil
 	}
@@ -482,7 +486,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 	if len(skippedStates) > 0 {
 		printSkippedChanges(w, skippedStates, skippedIDs)
-		return fmt.Errorf("%d change(s) skipped due to diverged or behind bookmarks", len(skippedStates))
+		return fmt.Errorf("%d change(s) skipped due to conflicts or diverged bookmarks", len(skippedStates))
 	}
 	return nil
 }

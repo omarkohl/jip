@@ -1017,6 +1017,129 @@ func TestIntegration_SendSkipsDescendantsOfBehind(t *testing.T) {
 	}
 }
 
+func TestIntegration_SendSkipsConflictedChanges(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create two branches that modify the same file, then merge them to
+	// produce a content conflict.
+	//
+	//   main
+	//   ├── A (modifies shared.go one way)
+	//   └── B (modifies shared.go another way)
+	//        \
+	//         C (merge of A and B — has conflict)
+
+	// Branch A: modify shared.go
+	writeAndCommit(t, repoDir, "shared.go", "package shared\n\nvar X = 1", "feat: branch A")
+	idA := getChangeID(t, repoDir, "@-")
+
+	// Branch B: modify shared.go differently (off main)
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "shared.go", "package shared\n\nvar X = 2", "feat: branch B")
+	idB := getChangeID(t, repoDir, "@-")
+
+	// Merge A and B — this creates a conflict in shared.go.
+	jjRun(t, repoDir, "new", idA, idB)
+	jjRun(t, repoDir, "commit", "-m", "feat: merge with conflict")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	// Should return an error because of skipped changes.
+	if err == nil {
+		t.Fatal("expected error from send with conflicted change, got nil")
+	}
+
+	// The conflicted merge change (and possibly descendants) should be skipped.
+	if !strings.Contains(output, "has conflicts") {
+		t.Errorf("expected 'has conflicts' in output, got:\n%s", output)
+	}
+
+	// A and B should still be sent (they have no conflicts).
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 2 {
+		t.Errorf("expected 2 PRs (non-conflicted changes), got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendSkipsDescendantsOfConflicted(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create a conflicted change with a descendant.
+	//
+	//   main
+	//   ├── A (modifies shared.go one way)
+	//   └── B (modifies shared.go another way)
+	//        \
+	//         C (merge — conflicted) → D (descendant of conflicted)
+
+	writeAndCommit(t, repoDir, "shared.go", "package shared\n\nvar X = 1", "feat: branch A")
+	idA := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "shared.go", "package shared\n\nvar X = 2", "feat: branch B")
+	idB := getChangeID(t, repoDir, "@-")
+
+	// Merge A and B (conflict).
+	jjRun(t, repoDir, "new", idA, idB)
+	jjRun(t, repoDir, "commit", "-m", "feat: conflicted merge")
+
+	// Add a descendant of the conflicted merge.
+	writeAndCommit(t, repoDir, "extra.go", "package extra", "feat: descendant of conflict")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	if err == nil {
+		t.Fatal("expected error from send with conflicted change, got nil")
+	}
+
+	// Should skip 2 changes (the conflicted merge + its descendant).
+	if !strings.Contains(output, "Skipped 2 change(s)") {
+		t.Errorf("expected 'Skipped 2 change(s)' in output, got:\n%s", output)
+	}
+
+	// The conflicted change should mention conflicts.
+	if !strings.Contains(output, "has conflicts") {
+		t.Errorf("expected 'has conflicts' in output, got:\n%s", output)
+	}
+
+	// The descendant should mention ancestor skip.
+	if !strings.Contains(output, "ancestor") {
+		t.Errorf("expected 'ancestor' in output, got:\n%s", output)
+	}
+
+	// A and B should still be sent.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 2 {
+		t.Errorf("expected 2 PRs (non-conflicted changes), got %d", len(mock.prs))
+	}
+}
+
 // findBookmarkForChange returns the bookmark name associated with a change ID.
 func findBookmarkForChange(t *testing.T, runner jj.Runner, changeID string) string {
 	t.Helper()
