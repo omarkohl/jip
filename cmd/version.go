@@ -8,66 +8,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// These variables are set at build time via -ldflags.
+// Version is set at build time via goreleaser ldflags:
 //
-//	go build -ldflags "-X github.com/omarkohl/jip/cmd.Version=0.2.0 -X github.com/omarkohl/jip/cmd.Commit=abc123 -X github.com/omarkohl/jip/cmd.Date=2026-02-27"
-var (
-	Version = "dev"
-	Commit  = ""
-	Date    = ""
-)
+//	-X github.com/omarkohl/jip/cmd.Version=0.2.0
+var Version = "dev"
 
-// buildVersion returns the full version string shown by --version.
-// It tries ldflags first, then falls back to debug.BuildInfo for
-// go install / go run builds.
+// buildVersion returns the version string shown by --version.
+//
+// Two build scenarios:
+//  1. goreleaser: Version is set via ldflags → return it directly.
+//  2. All other builds (go install @version, go build): Version is "dev",
+//     debug.BuildInfo provides the module version → strip "v" prefix.
 func buildVersion() string {
-	commit := Commit
-	date := Date
-	dirty := false
-
-	// Fall back to debug.BuildInfo when ldflags are not set.
-	if commit == "" {
-		if info, ok := debug.ReadBuildInfo(); ok {
-			// go install ...@version sets Main.Version but not vcs.* settings.
-			if Version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
-				Version = info.Main.Version
-			}
-			for _, s := range info.Settings {
-				switch s.Key {
-				case "vcs.revision":
-					commit = s.Value
-				case "vcs.time":
-					date = s.Value
-				case "vcs.modified":
-					dirty = s.Value == "true"
-				}
-			}
-		}
-	}
-
-	if commit == "" {
+	if Version != "dev" {
 		return Version
 	}
-
-	// Normalize: split off -dirty suffix, shorten hash, reattach.
-	if strings.HasSuffix(commit, "-dirty") {
-		dirty = true
-		commit = strings.TrimSuffix(commit, "-dirty")
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v := info.Main.Version
+		if v != "" && v != "(devel)" {
+			return strings.TrimPrefix(v, "v")
+		}
 	}
-	if len(commit) > 7 {
-		commit = commit[:7]
-	}
-	if dirty {
-		commit += "-dirty"
-	}
-
-	var parts []string
-	parts = append(parts, commit)
-	if date != "" {
-		parts = append(parts, date)
-	}
-
-	return fmt.Sprintf("%s (%s)", Version, strings.Join(parts, ", "))
+	return Version
 }
 
 func init() {

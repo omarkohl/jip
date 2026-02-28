@@ -3,8 +3,6 @@ version: 2
 builds:
   - ldflags:
       - -X github.com/omarkohl/jip/cmd.Version={{.Version}}
-      - -X github.com/omarkohl/jip/cmd.Commit={{.ShortCommit}}
-      - -X github.com/omarkohl/jip/cmd.Date={{.Date}}
     goos:
       - linux
       - darwin
