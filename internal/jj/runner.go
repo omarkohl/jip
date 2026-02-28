@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/omarkohl/jip/internal/retry"
 )
 
 // logTemplate is the jj template that outputs one JSON object per line.
@@ -127,32 +129,36 @@ func (r *realRunner) GitRemoteList() ([]byte, error) {
 }
 
 func (r *realRunner) GitFetch(remote string) error {
-	args := []string{"git", "fetch", "-R", r.repoDir, "--remote", remote}
-	cmd := exec.Command("jj", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("jj git fetch: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return retry.Do(func() error {
+		args := []string{"git", "fetch", "-R", r.repoDir, "--remote", remote}
+		cmd := exec.Command("jj", args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("jj git fetch: %w\n%s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
 }
 
 func (r *realRunner) GitPush(bookmarks []string, allowNew bool, remote string) error {
-	args := []string{"git", "push", "-R", r.repoDir}
-	if remote != "" {
-		args = append(args, "--remote", remote)
-	}
-	for _, b := range bookmarks {
-		args = append(args, "-b", b)
-	}
-	if allowNew {
-		args = append(args, "--allow-new")
-	}
-	cmd := exec.Command("jj", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("jj git push: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return retry.Do(func() error {
+		args := []string{"git", "push", "-R", r.repoDir}
+		if remote != "" {
+			args = append(args, "--remote", remote)
+		}
+		for _, b := range bookmarks {
+			args = append(args, "-b", b)
+		}
+		if allowNew {
+			args = append(args, "--allow-new")
+		}
+		cmd := exec.Command("jj", args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("jj git push: %w\n%s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
 }
 
 func (r *realRunner) Interdiff(from, to string) (string, error) {

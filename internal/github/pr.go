@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/omarkohl/jip/internal/retry"
 )
 
 // PRInfo holds the essential fields of a pull request.
@@ -59,15 +61,32 @@ func (c *Client) LookupPRsByBranch(branches []string) (map[string]*PRInfo, error
 	req.Header.Set("Authorization", "bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	var resp *http.Response
+	var rawBody []byte
+	err = retry.Do(func() error {
+		// Reset the request body for each attempt.
+		req.Body = io.NopCloser(bytes.NewReader(body))
+
+		var doErr error
+		resp, doErr = http.DefaultClient.Do(req)
+		if doErr != nil {
+			return doErr
+		}
+
+		rawBody, doErr = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if doErr != nil {
+			return doErr
+		}
+
+		// Retry on server errors (5xx); don't retry client errors (4xx).
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(rawBody))
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("sending request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	rawBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
 	if resp.StatusCode != 200 {

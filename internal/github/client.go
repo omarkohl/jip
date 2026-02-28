@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	gogithub "github.com/google/go-github/v68/github"
+
+	"github.com/omarkohl/jip/internal/retry"
 )
 
 // Service defines the GitHub operations needed by the send pipeline.
@@ -75,12 +77,17 @@ type UpdatePROpts struct {
 
 // CreatePR creates a new pull request and returns its info.
 func (c *Client) CreatePR(head, base, title, body string, draft bool) (*PRInfo, error) {
-	pr, _, err := c.gh.PullRequests.Create(context.Background(), c.owner, c.repo, &gogithub.NewPullRequest{
-		Title: &title,
-		Head:  &head,
-		Base:  &base,
-		Body:  &body,
-		Draft: &draft,
+	var pr *gogithub.PullRequest
+	err := retry.Do(func() error {
+		var apiErr error
+		pr, _, apiErr = c.gh.PullRequests.Create(context.Background(), c.owner, c.repo, &gogithub.NewPullRequest{
+			Title: &title,
+			Head:  &head,
+			Base:  &base,
+			Body:  &body,
+			Draft: &draft,
+		})
+		return apiErr
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating PR: %w", err)
@@ -109,7 +116,10 @@ func (c *Client) UpdatePR(number int, opts UpdatePROpts) error {
 	if opts.Base != nil {
 		update.Base = &gogithub.PullRequestBranch{Ref: opts.Base}
 	}
-	_, _, err := c.gh.PullRequests.Edit(context.Background(), c.owner, c.repo, number, update)
+	err := retry.Do(func() error {
+		_, _, apiErr := c.gh.PullRequests.Edit(context.Background(), c.owner, c.repo, number, update)
+		return apiErr
+	})
 	if err != nil {
 		return fmt.Errorf("updating PR #%d: %w", number, err)
 	}
@@ -118,8 +128,11 @@ func (c *Client) UpdatePR(number int, opts UpdatePROpts) error {
 
 // CommentOnPR posts a comment on a pull request.
 func (c *Client) CommentOnPR(number int, body string) error {
-	_, _, err := c.gh.Issues.CreateComment(context.Background(), c.owner, c.repo, number, &gogithub.IssueComment{
-		Body: &body,
+	err := retry.Do(func() error {
+		_, _, apiErr := c.gh.Issues.CreateComment(context.Background(), c.owner, c.repo, number, &gogithub.IssueComment{
+			Body: &body,
+		})
+		return apiErr
 	})
 	if err != nil {
 		return fmt.Errorf("commenting on PR #%d: %w", number, err)
@@ -129,7 +142,12 @@ func (c *Client) CommentOnPR(number int, body string) error {
 
 // GetAuthenticatedUser returns the login of the authenticated user.
 func (c *Client) GetAuthenticatedUser() (string, error) {
-	user, _, err := c.gh.Users.Get(context.Background(), "")
+	var user *gogithub.User
+	err := retry.Do(func() error {
+		var apiErr error
+		user, _, apiErr = c.gh.Users.Get(context.Background(), "")
+		return apiErr
+	})
 	if err != nil {
 		return "", fmt.Errorf("getting authenticated user: %w", err)
 	}
@@ -138,8 +156,11 @@ func (c *Client) GetAuthenticatedUser() (string, error) {
 
 // RequestReviewers adds reviewers to a pull request.
 func (c *Client) RequestReviewers(number int, reviewers []string) error {
-	_, _, err := c.gh.PullRequests.RequestReviewers(context.Background(), c.owner, c.repo, number, gogithub.ReviewersRequest{
-		Reviewers: reviewers,
+	err := retry.Do(func() error {
+		_, _, apiErr := c.gh.PullRequests.RequestReviewers(context.Background(), c.owner, c.repo, number, gogithub.ReviewersRequest{
+			Reviewers: reviewers,
+		})
+		return apiErr
 	})
 	if err != nil {
 		return fmt.Errorf("requesting reviewers on PR #%d: %w", number, err)
