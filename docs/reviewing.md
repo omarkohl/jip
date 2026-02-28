@@ -5,15 +5,14 @@ created by jip. You don't need jip or jj installed to review them.
 
 ## What a stacked PR looks like
 
-Each PR in a stack has a description like:
+Each PR in a stack has a description listing all PRs with the current one
+highlighted:
 
-> **Stack:**
-> - PR #3: Add API endpoint **← you are here**
-> - PR #2: Add database migration
-> - PR #1: Add data model
+![GitHub PR showing stack navigation with links to all PRs in the stack](images/pr-stack-navigation.png)
 
-The PR diff shows only the changes in *that specific commit*, not the
-cumulative diff of the whole stack.
+The PR description tells you which commit to review. The 'Files changed' tab
+shows the cumulative diff from `main`, but you should **only** look at the
+highlighted commit (5670b0e in the screenshot above).
 
 ## How to review
 
@@ -42,14 +41,15 @@ reviewable change.
 
 ## When you want something changed
 
-Say you're reviewing a 4-PR stack and you request changes on PR #2:
+Say you're reviewing the 3-PR stack from the screenshot above and you request
+changes on PR #2 (the user store):
 
 1. The author fixes the commit for PR #2 and runs `jip send`.
 2. jip **posts a comment** on PR #2 showing exactly what changed since your
    last review (rebase noise is filtered out). You don't need to re-read the
    full diff — just read that comment.
-3. PRs #3 and #4 are rebased but their actual content didn't change, so their
-   diffs stay the same.
+3. PR #3 is rebased but its actual content didn't change, so its diff stays
+   the same.
 4. PR #1 is unaffected.
 
 ### What are these diff comments?
@@ -58,6 +58,12 @@ When the author updates a PR, jip posts a comment showing the diff between the
 old and new version of the commit. Rebase changes are factored out, so you see
 only what the author actually changed in response to your review. (This is
 sometimes called an "interdiff" — a diff between two diffs.)
+
+![Interdiff comment showing exactly what changed since the last push](images/interdiff-comment.png)
+
+If a PR was only rebased without any actual content changes, jip notes that:
+
+![Comment indicating the PR was only rebased with no content changes](images/rebase-only-comment.png)
 
 ## Merging
 

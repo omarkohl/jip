@@ -49,55 +49,41 @@ jip s --upstream upstream
 
 ---
 
-## Multi-stack workflow: reformat, bugfix, feature, and docs
+## Multi-stack workflow: user feature and docs
 
-You need to make four changes to a project. Three are related (reformat →
-bugfix → feature), one is unrelated (docs). You decide to split them into two
-stacks.
+You need to make four changes to a project. Three are related (data model →
+store → API endpoint), one is unrelated (docs). You decide to split them into
+two stacks.
 
 ### Setting up the stacks
 
 ```bash
-# Stack 1: reformat → bugfix → feature
+# Stack 1: data model → store → API endpoint
 jj new main
-# ... run gofumpt, verify ...
-jj commit -m "style: reformat all Go files with gofumpt"
+# ... create user type ...
+jj commit -m "feat: add user data model"
 
-# ... fix the bug ...
-jj commit -m "fix: correct off-by-one in pagination"
+# ... create store ...
+jj commit -m "feat: add user store"
 
-# ... implement feature ...
-jj commit -m "feat: add cursor-based pagination"
+# ... create handler ...
+jj commit -m "feat: add user API endpoint"
 
 # Stack 2: unrelated docs change (branching from main, not from the stack above)
 jj new main
 # ... update docs ...
-jj commit -m "docs: update API examples for v2"
+jj commit -m "docs: update README with getting started section"
 ```
 
-Your jj log now looks like:
+Your jj log now shows two independent stacks branching from main:
 
-```
-@  yyozkxuu alice@example.com 2026-02-26 21:18:04 beb5c864
-│  (empty) (no description set)
-○  vuzkwnuw alice@example.com 2026-02-26 21:18:04 9df5376f
-│  docs: update API examples for v2
-│ ○  prmxnnou alice@example.com 2026-02-26 21:18:04 06d70097
-│ │  feat: add cursor-based pagination
-│ ○  plxqtqrq alice@example.com 2026-02-26 21:18:04 5ec21ca9
-│ │  fix: correct off-by-one in pagination
-│ ○  tolsvlnw alice@example.com 2026-02-26 21:18:04 0268aba3
-├─╯  style: reformat all Go files with gofumpt
-○  tznkmxxk alice@example.com 2026-02-26 21:17:54 main 62073074
-│  initial commit
-◆  zzzzzzzz root() 00000000
-```
+![jj log showing two independent stacks branching from main](images/multi-stack-jj-log.png)
 
 ### Sending both stacks
 
 ```bash
 # Send both stacks at once (tips of each stack, jip resolves ancestors)
-jip s prm vu
+jip s qnv ppx
 ```
 
 jip creates 4 PRs total: 3 for stack 1 (each building on the previous), 1 for
@@ -105,38 +91,29 @@ the docs change.
 
 ### Review feedback comes in
 
-The reviewer approves the reformat PR and merges it. They request changes to
-the bugfix and want a small tweak to the feature.
+The reviewer requests changes to the user store (PR #2) — they want a `List`
+method added.
 
 ```bash
-# Fix the bugfix commit
-jj new plx
-# ... make changes ...
+# Fix the user store commit
+jj new pkn
+# ... add List method ...
 jj squash
-
-# Fix the feature commit
-jj new prm
-# ... make changes ...
-jj squash
-
-# Fetch the merged reformat PR and rebase
-jj git fetch
-jj rebase -o main
 
 # Update all PRs (jip posts comments showing what changed)
-jip s prm vu
+jip s qnv ppx
 
 # Or combine rebase + send in one step
-jip s --rebase prm vu
+jip s --rebase qnv ppx
 ```
 
-The reformat PR is already merged, so jip skips it. The bugfix PR now targets
-`main` directly (since its parent was merged). The feature PR is rebased on
-top. Reviewers see comments showing exactly what changed.
+The user store PR (#2) gets a comment showing the added `List` method. The API
+endpoint PR (#3) is rebased but its content didn't change. The data model PR
+(#1) is unaffected. Reviewers see comments showing exactly what changed.
 
 ### Continuing the cycle
 
-The reviewer approves and merges the bugfix PR:
+The reviewer approves and merges the data model PR (#1):
 
 ```bash
 jj git fetch
@@ -148,8 +125,8 @@ jip s -x main::
 jip s -x --rebase main::
 ```
 
-Now only the feature PR remains, targeting `main` directly. The stack
-shortened itself one PR at a time.
+Now the user store PR targets `main` directly. The stack shortened itself one
+PR at a time.
 
 Meanwhile the docs PR was reviewed and merged independently — it was never
 part of the same stack.
@@ -193,6 +170,10 @@ jj squash
 jip s
 ```
 
+jip posts a comment on the updated PR showing exactly what changed:
+
+![Interdiff comment showing exactly what changed since the last push](images/interdiff-comment.png)
+
 ### How do I add a new commit to an existing stack?
 
 Use `jj new` to insert a commit at the right position:
@@ -226,3 +207,5 @@ on GitHub. The remaining commit's PR is updated normally.
 
 Yes. If your revset resolves to a single commit, jip creates a single PR with
 no stack navigation in the description.
+
+![A single-commit PR with no stack navigation](images/independent-pr.png)
