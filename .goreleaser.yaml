@@ -17,4 +17,13 @@ archives:
         formats: [zip]
 
 changelog:
-  use: github-native
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat:'
+    - title: Bug Fixes
+      regexp: '^fix:'
+    - title: Refactoring
+      regexp: '^refactor:'
+    - title: Other
+      order: 999
