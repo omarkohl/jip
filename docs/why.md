@@ -30,6 +30,10 @@ this to GitHub's PR model by turning each commit into its own PR.
 
 ## The force-push problem
 
+If a commit is the unit of review it means that any improvements that are
+uncovered during review need to be fixed by amending the commit, which in turn
+means you need to force push the PR branch.
+
 When you update a PR by force-pushing, GitHub shows the full diff against the
 base branch but provides no good way to see *what changed since the last
 review*. Reviewers are left re-reading the entire PR or mentally diffing

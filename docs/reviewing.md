@@ -16,14 +16,17 @@ highlighted commit (5670b0e in the screenshot above).
 
 ## How to review
 
-### The simple approach (recommended for most reviewers)
+### The standard approach
 
 1. **Start from the bottom of the stack** (PR #1 in the example above).
 2. **Review only the commit highlighted in the description.** Each PR is one
    self-contained change.
-3. **Approve or request changes** as you would with any normal PR.
-4. **Merge from the bottom up.** Merge PR #1 first. The PR author will then
-   rebase and update the remaining PRs so PR #2 targets `main` directly.
+3. **Approve or request changes** as you would with any normal PR. If the
+   highlighted commit of the PR looks good, approve the PR, even if some
+   earlier PR in the chain might require a fix.
+4. **Merge from the bottom up.** Merge PR #1 first, then PR #2 etc. The PR
+   author will rebase and update the remaining PRs if necessary (e.g. if GitHub
+   claims there is a conflict).
 
 ### The minimal approach (if stacked PRs feel overwhelming)
 

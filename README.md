@@ -9,13 +9,14 @@ request. When you update a PR, jip posts a comment showing what you changed
 
 ## Features
 
-- **One commit = one PR** — each commit gets its own focused, reviewable PR
+- **One commit = one PR** — each commit gets its own focused, reviewable PR,
+  with title and description taken from the commit message
 - **Review comments on update** — when you update a PR, jip posts a diff
   showing only what you changed (rebase noise is filtered out)
 - **Automatic bookmarks** — no need to manually create jj bookmarks
 - **Fork workflow** — works without write access to the target repo
 - **Normal GitHub merge** — no special "land" command, just merge PRs as usual
-- **Merge commits in stacks** — supports non-linear revision graphs
+- **Stacks may contain merge commits** — supports non-linear revision graphs
 
 ## Installation
 
