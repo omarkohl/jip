@@ -54,7 +54,8 @@ func BuildStackedPRBody(commitHash, repoFullName string, prNumber int, allPRs []
 
 	b.WriteString("\n[^1]: A stacked PR is a pull request that depends on other pull requests. ")
 	b.WriteString("The current PR depends on the ones listed below it and MUST NOT be merged before they are merged. ")
-	b.WriteString("The PRs listed above the current one in turn depend on it and won't be merged until the current one is.\n")
+	b.WriteString("The PRs listed above the current one in turn depend on it and won't be merged until the current one is. ")
+	b.WriteString("Learn more about [why](https://github.com/omarkohl/jip/blob/main/docs/why.md) and [how to review](https://github.com/omarkohl/jip/blob/main/docs/reviewing.md).\n")
 
 	return b.String()
 }
@@ -71,7 +72,7 @@ func BuildDiffComment(codeDiff, repoName, baseBranch, oldCommit, newCommit strin
 	footer := rangeDiffFooter(repoName, baseBranch, oldCommit, newCommit)
 
 	if strings.TrimSpace(codeDiff) == "" {
-		return "### Changes since last push\n\n**None.** Probably just a rebase because the PR branch was out of date.\n" + footer
+		return "### Changes since last push\n\n**No code changes** (likely just a rebase).\n" + footer
 	}
 
 	files := parseGitDiff(codeDiff)
@@ -109,9 +110,13 @@ func rangeDiffFooter(repoName, baseBranch, oldCommit, newCommit string) string {
 	newShort := newCommit[:minInt(7, len(newCommit))]
 	compareURL := fmt.Sprintf("https://github.com/%s/compare/%s..%s", repoName, oldCommit, newCommit)
 	return fmt.Sprintf(
-		"\n---\n<sub>[Compare on GitHub](%s)[^1] · Local range-diff: `git range-diff %s %s %s`</sub>"+
-			"\n\n[^1]: The GitHub compare view may include unrelated changes introduced by rebases, as GitHub does not currently support range-diff.\n",
-		compareURL, baseBranch, oldShort, newShort,
+		"\n---\n<sub>View the diff on [GitHub](%s) "+
+			"(may include unrelated changes due to rebases since GitHub does not currently implement `git range-diff`).\n"+
+			"View the diff locally (will only work if you fetched the older commit at some point):\n"+
+			"`git range-diff %s %s %s`\n"+
+			"`jj interdiff -f %s -t %s`\n"+
+			"</sub>\n",
+		compareURL, baseBranch, oldShort, newShort, oldShort, newShort,
 	)
 }
 

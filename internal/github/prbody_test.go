@@ -79,8 +79,8 @@ func TestBuildDiffComment_EmptyDiff(t *testing.T) {
 	if !strings.Contains(result, "Changes since last push") {
 		t.Errorf("expected 'Changes since last push' header, got:\n%s", result)
 	}
-	if !strings.Contains(result, "**None.**") {
-		t.Errorf("expected 'None' message for empty diff, got:\n%s", result)
+	if !strings.Contains(result, "**No code changes**") {
+		t.Errorf("expected 'No code changes' message for empty diff, got:\n%s", result)
 	}
 }
 
@@ -111,12 +111,15 @@ func TestBuildDiffComment_WithDiff(t *testing.T) {
 	if !strings.Contains(result, "<details open>") {
 		t.Errorf("expected open details for small diff, got:\n%s", result)
 	}
-	// Should have compare link.
-	if !strings.Contains(result, "Compare on GitHub") {
+	// Should have compare link and local diff commands.
+	if !strings.Contains(result, "View the diff on") {
 		t.Errorf("expected GitHub compare link, got:\n%s", result)
 	}
-	if !strings.Contains(result, "range-diff") {
-		t.Errorf("expected range-diff hint, got:\n%s", result)
+	if !strings.Contains(result, "git range-diff") {
+		t.Errorf("expected git range-diff hint, got:\n%s", result)
+	}
+	if !strings.Contains(result, "jj interdiff") {
+		t.Errorf("expected jj interdiff hint, got:\n%s", result)
 	}
 }
 
@@ -143,7 +146,7 @@ func TestBuildDiffComment_LargeDiff_CollapsedByDefault(t *testing.T) {
 
 func TestBuildDiffComment_EmptyDiff_WithFooter(t *testing.T) {
 	result := BuildDiffComment("", "owner/repo", "main", "aaa111222333", "bbb444555666")
-	if !strings.Contains(result, "Compare on GitHub") {
+	if !strings.Contains(result, "View the diff on") {
 		t.Errorf("expected compare link even for empty diff, got:\n%s", result)
 	}
 }
@@ -205,5 +208,8 @@ func TestRangeDiffFooter_WithData(t *testing.T) {
 	}
 	if !strings.Contains(result, "git range-diff main old1234 new4567") {
 		t.Errorf("expected range-diff command, got:\n%s", result)
+	}
+	if !strings.Contains(result, "jj interdiff -f old1234 -t new4567") {
+		t.Errorf("expected jj interdiff command, got:\n%s", result)
 	}
 }

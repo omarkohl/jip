@@ -560,9 +560,9 @@ func TestIntegration_SendPostsInterdiffComment(t *testing.T) {
 		t.Errorf("comment missing diff content (expected 'input'):\n%s", comment)
 	}
 
-	// The comment should have a Compare on GitHub link.
-	if !strings.Contains(comment, "Compare on GitHub") {
-		t.Errorf("comment missing 'Compare on GitHub' link:\n%s", comment)
+	// The comment should have a GitHub compare link.
+	if !strings.Contains(comment, "View the diff on") {
+		t.Errorf("comment missing GitHub compare link:\n%s", comment)
 	}
 
 	// The output should indicate the PR was updated, not created.
