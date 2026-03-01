@@ -71,8 +71,9 @@ If a PR was only rebased without any actual content changes, jip notes that:
 ## Merging
 
 PRs created by jip are **normal GitHub PRs**. There is no special "land"
-command. After merging the bottom PR, the PR author will rebase the remaining
-stack so the next PR targets the base branch directly.
+command. After merging the bottom PR, continue merging the PRs that you approve
+of from the bottom up. If there is a conflict, the PR author will take care of
+the necessary rebases.
 
 **Use rebase merge** (strongly preferred):
 
@@ -82,7 +83,7 @@ stack so the next PR targets the base branch directly.
 The other merge strategies work but have downsides:
 
 - **"Create a merge commit"** could produce duplicate commits in the history,
-  which is technically unproblematic but makes the history harder to read.
+  which is technically unproblematic but makes the Git history harder to read.
 - **"Squash and merge"** rewrites the commit message. Since each PR is already
   a single polished commit, squashing discards the carefully written message
   and replaces it with GitHub's auto-generated one.
