@@ -5,9 +5,11 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "jip",
-	Short:   "jip " + buildVersion() + " — Stacked PRs for jj and GitHub",
-	Version: buildVersion(),
+	Use:           "jip",
+	Short:         "jip " + buildVersion() + " — Stacked PRs for jj and GitHub",
+	Version:       buildVersion(),
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func Execute() error {
