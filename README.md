@@ -36,21 +36,29 @@ repository. jip does **not** work with Git directly.
 
 ```bash
 # Make your changes as a stack of jj commits
-jj commit -m "feat: add user data model"
-jj commit -m "feat: add user store"
-jj commit -m "feat: add user API endpoint"
+jj commit -m "feat: add user data model" # change-id: wys
+jj commit -m "feat: add user store" # change-id: pkn
+jj commit -m "feat: add user API endpoint" # change-id: qnv
 
-# Create/update PRs for the stack
+# Create/update PRs for the stack (defaults to @-)
 jip send
 
-# After review feedback, update a commit
-jj new <change-id>
+# After review feedback, update the "feat: add user store" change
+jj new pkn
 # ... make changes ...
 jj squash
-jip s # alias for 'send'
+jip s qnv # 's' is short for 'send'
 
-# After bottom PR is merged upstream, rebase the rest and send again
-jip s --rebase
+# Assume that the PR "feat: add user data model" is merged on GitHub
+
+# Update the other PRs by doing the following ...
+jj git fetch
+jj new qnv
+jj rebase -o main
+jip s
+
+# ... or in one command:
+jip s --rebase qnv
 ```
 
 A stack of commits before sending:
