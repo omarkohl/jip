@@ -14,7 +14,7 @@ request. When you update a PR, jip posts a comment showing what you changed
 - **Review comments on update** — when you update a PR, jip posts a diff
   showing only what you changed (rebase noise is filtered out)
 - **Automatic bookmarks** — no need to manually create jj bookmarks
-- **Fork workflow** — works without write access to the target repo
+- **Supports forks** — works both for repositories where you have write access as well as forked ones
 - **Normal GitHub merge** — no special "land" command, just merge PRs as usual
 - **Stacks may contain merge commits** — supports non-linear revision graphs
 
