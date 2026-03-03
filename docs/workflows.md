@@ -119,7 +119,7 @@ The reviewer approves and merges the data model PR (#1):
 jj git fetch
 jj rebase -o main
 # Update all existing (-x/--existing) PRs for changes that are descendants of main
-jip s -x main::
+jip s --existing main::
 
 # Or combine rebase + send in one step
 jip s -x --rebase main::

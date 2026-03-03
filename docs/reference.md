@@ -4,9 +4,19 @@
 
 | Command | Description |
 |---|---|
-| `jip send` (alias: `s`) | Create or update PRs for a stack of changes |
 | `jip auth login` | Authenticate with GitHub using OAuth device flow |
 | `jip auth status` | Show current authentication status |
+| `jip completion` | Generate shell auto-completion scripts |
+| `jip help` | Display help about a command |
+| `jip send` (alias: `s`) | Create or update PRs for a stack of changes |
+| `jip version` | Display the version |
+
+Global flags:
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--help` | `-h` | | Display help (same as `help` command) |
+| `--version` | `-v` | | Display the version (same as `version` command) |
 
 ## `send` flags
 
@@ -41,8 +51,12 @@ repository. Use `--upstream` to specify where PRs should be opened while pushing
 branches to your fork.
 
 ```bash
-# Push to your fork, open PRs against upstream
+# Assuming your fork is "origin" and you want to open a PR in the upstream project
+jj git remote add upstream https://github.com/some/project.git
 jip send --upstream upstream
+
+# or without adding a remote
+jip send --upstream https://github.com/some/project.git
 ```
 
 ## Rebasing before send (`--rebase`)
@@ -75,3 +89,17 @@ jip uses the following authentication methods, in order:
 1. `GH_TOKEN` or `GITHUB_TOKEN` environment variable
 2. `gh` CLI authentication (if `gh` is installed and authenticated)
 3. Built-in OAuth device flow (`jip auth login`)
+
+## Shell Completion
+
+Execute `jip completion --help` to learn how to generate different shell
+completions.
+
+This also includes auto-completing jj revsets and bookmark names where
+appropriate.
+
+For example, for Bash you can add the following to `~/.bashrc`:
+
+```bash
+source <(jip completion bash)
+```
