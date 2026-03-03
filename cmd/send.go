@@ -20,7 +20,8 @@ var sendCmd = &cobra.Command{
 resolved stack. Each change gets its own PR targeting the base branch.
 
 Default revset is @- (the last committed change and its ancestors up to base).`,
-	RunE: runSend,
+	RunE:              runSend,
+	ValidArgsFunction: completeJJRevsets,
 }
 
 func init() {
@@ -34,6 +35,8 @@ func init() {
 	sendCmd.Flags().BoolP("existing", "x", false, "Only update PRs that already exist (skip new ones)")
 	sendCmd.Flags().Bool("no-stack", false, "Send only the tip of each stack as a single PR")
 	sendCmd.Flags().Bool("rebase", false, "Rebase the stack onto the base branch before sending")
+
+	_ = sendCmd.RegisterFlagCompletionFunc("base", completeJJBookmarks)
 }
 
 // sendOpts holds configuration for the send pipeline.
