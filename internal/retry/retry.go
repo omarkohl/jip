@@ -1,6 +1,7 @@
 package retry
 
 import (
+	"log/slog"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -63,6 +64,7 @@ func Do(fn func() error, opts ...Option) error {
 			}
 			// Add jitter: 50-100% of the computed backoff.
 			jittered := time.Duration(backoff * (0.5 + rand.Float64()*0.5))
+			slog.Debug("retrying", "attempt", attempt+2, "max", cfg.maxAttempts, "err", err, "backoff", jittered)
 			time.Sleep(jittered)
 		}
 	}

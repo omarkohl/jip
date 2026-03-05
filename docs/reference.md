@@ -15,6 +15,7 @@ Global flags:
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
+| `--debug` | | | Enable debug logging to stderr (also via `JIP_DEBUG` env var) |
 | `--help` | `-h` | | Display help (same as `help` command) |
 | `--version` | `-v` | | Display the version (same as `version` command) |
 

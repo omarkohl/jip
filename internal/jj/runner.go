@@ -1,7 +1,10 @@
 package jj
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -80,11 +83,14 @@ func (r *realRunner) Log(revset string) ([]byte, error) {
 		"-r", revset,
 		"-T", logTemplate,
 	}
+	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 		return nil, fmt.Errorf("jj log: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	slog.Debug("jj exec ok", "bytes", len(out))
 	return out, nil
 }
 
@@ -96,11 +102,14 @@ func (r *realRunner) BookmarkList() ([]byte, error) {
 		"-R", r.repoDir,
 		"-T", bookmarkListTemplate,
 	}
+	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 		return nil, fmt.Errorf("jj bookmark list: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	slog.Debug("jj exec ok", "bytes", len(out))
 	return out, nil
 }
 
@@ -111,31 +120,41 @@ func (r *realRunner) BookmarkSet(name, rev string) error {
 		name,
 		"-r", rev,
 	}
+	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 		return fmt.Errorf("jj bookmark set: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	slog.Debug("jj exec ok", "bytes", len(out))
 	return nil
 }
 
 func (r *realRunner) GitRemoteList() ([]byte, error) {
-	cmd := exec.Command("jj", "git", "remote", "list", "-R", r.repoDir)
+	args := []string{"git", "remote", "list", "-R", r.repoDir}
+	logCmd("jj", args)
+	cmd := exec.Command("jj", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 		return nil, fmt.Errorf("jj git remote list: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	slog.Debug("jj exec ok", "bytes", len(out))
 	return out, nil
 }
 
 func (r *realRunner) GitFetch(remote string) error {
 	return retry.Do(func() error {
 		args := []string{"git", "fetch", "-R", r.repoDir, "--remote", remote}
+		logCmd("jj", args)
 		cmd := exec.Command("jj", args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
+			slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 			return fmt.Errorf("jj git fetch: %w\n%s", err, strings.TrimSpace(string(out)))
 		}
+		slog.Debug("jj exec ok", "bytes", len(out))
 		return nil
 	})
 }
@@ -152,11 +171,14 @@ func (r *realRunner) GitPush(bookmarks []string, allowNew bool, remote string) e
 		if allowNew {
 			args = append(args, "--allow-new")
 		}
+		logCmd("jj", args)
 		cmd := exec.Command("jj", args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
+			slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 			return fmt.Errorf("jj git push: %w\n%s", err, strings.TrimSpace(string(out)))
 		}
+		slog.Debug("jj exec ok", "bytes", len(out))
 		return nil
 	})
 }
@@ -168,11 +190,14 @@ func (r *realRunner) Interdiff(from, to string) (string, error) {
 		"--from", from,
 		"--to", to,
 	}
+	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 		return "", fmt.Errorf("jj interdiff: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	slog.Debug("jj exec ok", "bytes", len(out))
 	return string(out), nil
 }
 
@@ -181,12 +206,43 @@ func (r *realRunner) Rebase(revsets []string, destination string) error {
 	for _, rev := range revsets {
 		args = append(args, "-b", rev)
 	}
+	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
 		return fmt.Errorf("jj rebase: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
+	slog.Debug("jj exec ok", "bytes", len(out))
 	return nil
+}
+
+// debugEnabled reports whether debug-level logging is active.
+func debugEnabled() bool {
+	return slog.Default().Handler().Enabled(context.Background(), slog.LevelDebug)
+}
+
+// logCmd prints a copy-pasteable shell command to stderr when debug
+// logging is enabled. It writes directly to stderr (bypassing slog)
+// because slog.TextHandler escapes backslashes and quotes inside
+// values, which makes the output uncopyable.
+func logCmd(prog string, args []string) {
+	if !debugEnabled() {
+		return
+	}
+	var b strings.Builder
+	b.WriteString(prog)
+	for _, a := range args {
+		b.WriteByte(' ')
+		if a == "" || strings.ContainsAny(a, " \t\n\"'\\|&;()<>$`!{}*?[]#~") {
+			b.WriteByte('\'')
+			b.WriteString(strings.ReplaceAll(a, "'", "'\\''"))
+			b.WriteByte('\'')
+		} else {
+			b.WriteString(a)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "DEBUG $ %s\n", b.String())
 }
 
 // ParseRemoteList parses the output of jj git remote list into a map

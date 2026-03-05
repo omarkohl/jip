@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -36,6 +37,7 @@ type prNodes struct {
 // given head branch names. Returns a map from branch name to PRInfo for
 // branches that have an open PR.
 func (c *Client) LookupPRsByBranch(branches []string) (map[string]*PRInfo, error) {
+	slog.Debug("LookupPRsByBranch", "branches", branches)
 	if len(branches) == 0 {
 		return map[string]*PRInfo{}, nil
 	}
@@ -119,6 +121,7 @@ func (c *Client) LookupPRsByBranch(branches []string) (map[string]*PRInfo, error
 		}
 	}
 
+	slog.Debug("LookupPRsByBranch ok", "matched", len(out))
 	return out, nil
 }
 

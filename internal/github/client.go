@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	gogithub "github.com/google/go-github/v68/github"
@@ -77,6 +78,7 @@ type UpdatePROpts struct {
 
 // CreatePR creates a new pull request and returns its info.
 func (c *Client) CreatePR(head, base, title, body string, draft bool) (*PRInfo, error) {
+	slog.Debug("CreatePR", "head", head, "base", base, "title", title, "draft", draft)
 	var pr *gogithub.PullRequest
 	err := retry.Do(func() error {
 		var apiErr error
@@ -90,8 +92,10 @@ func (c *Client) CreatePR(head, base, title, body string, draft bool) (*PRInfo, 
 		return apiErr
 	})
 	if err != nil {
+		slog.Debug("CreatePR failed", "err", err)
 		return nil, fmt.Errorf("creating PR: %w", err)
 	}
+	slog.Debug("CreatePR ok", "number", pr.GetNumber())
 	return &PRInfo{
 		Number:      pr.GetNumber(),
 		State:       pr.GetState(),
@@ -106,6 +110,7 @@ func (c *Client) CreatePR(head, base, title, body string, draft bool) (*PRInfo, 
 
 // UpdatePR updates fields on an existing pull request.
 func (c *Client) UpdatePR(number int, opts UpdatePROpts) error {
+	slog.Debug("UpdatePR", "number", number)
 	update := &gogithub.PullRequest{}
 	if opts.Title != nil {
 		update.Title = opts.Title
@@ -121,13 +126,16 @@ func (c *Client) UpdatePR(number int, opts UpdatePROpts) error {
 		return apiErr
 	})
 	if err != nil {
+		slog.Debug("UpdatePR failed", "number", number, "err", err)
 		return fmt.Errorf("updating PR #%d: %w", number, err)
 	}
+	slog.Debug("UpdatePR ok", "number", number)
 	return nil
 }
 
 // CommentOnPR posts a comment on a pull request.
 func (c *Client) CommentOnPR(number int, body string) error {
+	slog.Debug("CommentOnPR", "number", number)
 	err := retry.Do(func() error {
 		_, _, apiErr := c.gh.Issues.CreateComment(context.Background(), c.owner, c.repo, number, &gogithub.IssueComment{
 			Body: &body,
@@ -135,13 +143,16 @@ func (c *Client) CommentOnPR(number int, body string) error {
 		return apiErr
 	})
 	if err != nil {
+		slog.Debug("CommentOnPR failed", "number", number, "err", err)
 		return fmt.Errorf("commenting on PR #%d: %w", number, err)
 	}
+	slog.Debug("CommentOnPR ok", "number", number)
 	return nil
 }
 
 // GetAuthenticatedUser returns the login of the authenticated user.
 func (c *Client) GetAuthenticatedUser() (string, error) {
+	slog.Debug("GetAuthenticatedUser")
 	var user *gogithub.User
 	err := retry.Do(func() error {
 		var apiErr error
@@ -149,13 +160,16 @@ func (c *Client) GetAuthenticatedUser() (string, error) {
 		return apiErr
 	})
 	if err != nil {
+		slog.Debug("GetAuthenticatedUser failed", "err", err)
 		return "", fmt.Errorf("getting authenticated user: %w", err)
 	}
+	slog.Debug("GetAuthenticatedUser ok", "login", user.GetLogin())
 	return user.GetLogin(), nil
 }
 
 // RequestReviewers adds reviewers to a pull request.
 func (c *Client) RequestReviewers(number int, reviewers []string) error {
+	slog.Debug("RequestReviewers", "number", number, "reviewers", reviewers)
 	err := retry.Do(func() error {
 		_, _, apiErr := c.gh.PullRequests.RequestReviewers(context.Background(), c.owner, c.repo, number, gogithub.ReviewersRequest{
 			Reviewers: reviewers,
@@ -163,7 +177,9 @@ func (c *Client) RequestReviewers(number int, reviewers []string) error {
 		return apiErr
 	})
 	if err != nil {
+		slog.Debug("RequestReviewers failed", "number", number, "err", err)
 		return fmt.Errorf("requesting reviewers on PR #%d: %w", number, err)
 	}
+	slog.Debug("RequestReviewers ok", "number", number)
 	return nil
 }
