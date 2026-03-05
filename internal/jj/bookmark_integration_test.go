@@ -234,8 +234,8 @@ func TestIntegration_BookmarkSyncBehind(t *testing.T) {
 		if b.Name == "behind-branch" {
 			s := b.SyncWith("origin")
 			t.Logf("behind-branch: sync=%v, remotes=%+v", s, b.Remotes)
-			if s != SyncBehind {
-				t.Errorf("expected SyncBehind, got %v", s)
+			if s != SyncAhead {
+				t.Errorf("expected SyncAhead, got %v", s)
 			}
 			return
 		}

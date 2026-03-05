@@ -346,10 +346,6 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			skippedIDs[s.change.ChangeID] = skipReason{
 				reason: "local and remote have diverged — resolve with `jj bookmark set` or force-push",
 			}
-		} else if s.bookmark.SyncState == jj.SyncBehind {
-			skippedIDs[s.change.ChangeID] = skipReason{
-				reason: "remote is ahead of local — pull changes first",
-			}
 		}
 	}
 

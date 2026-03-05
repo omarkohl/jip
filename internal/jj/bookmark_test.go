@@ -7,8 +7,8 @@ import (
 // --- ParseBookmarkList tests ---
 
 func TestParseBookmarkList_LocalAndRemote(t *testing.T) {
-	jsonl := `{"name":"main","remote":null,"present":true,"target":"abc123","change_id":"xaa","tracked":false,"ahead":0,"behind":0}
-{"name":"main","remote":"origin","present":true,"target":"abc123","change_id":"xaa","tracked":true,"ahead":0,"behind":0}
+	jsonl := `{"name":"main","remote":null,"present":true,"target":"abc123","change_id":"xaa","tracked":false,"synced":false}
+{"name":"main","remote":"origin","present":true,"target":"abc123","change_id":"xaa","tracked":true,"synced":true}
 `
 	bookmarks, err := ParseBookmarkList([]byte(jsonl))
 	if err != nil {
@@ -37,15 +37,15 @@ func TestParseBookmarkList_LocalAndRemote(t *testing.T) {
 	if !rs.Tracked {
 		t.Error("expected tracked=true")
 	}
-	if rs.Ahead != 0 || rs.Behind != 0 {
-		t.Errorf("expected ahead=0/behind=0, got %d/%d", rs.Ahead, rs.Behind)
+	if !rs.Synced {
+		t.Error("expected synced=true")
 	}
 }
 
 func TestParseBookmarkList_FiltersGitRemote(t *testing.T) {
-	jsonl := `{"name":"main","remote":null,"present":true,"target":"abc","change_id":"x","tracked":false,"ahead":0,"behind":0}
-{"name":"main","remote":"git","present":true,"target":"abc","change_id":"x","tracked":true,"ahead":0,"behind":0}
-{"name":"main","remote":"origin","present":true,"target":"abc","change_id":"x","tracked":true,"ahead":0,"behind":0}
+	jsonl := `{"name":"main","remote":null,"present":true,"target":"abc","change_id":"x","tracked":false,"synced":false}
+{"name":"main","remote":"git","present":true,"target":"abc","change_id":"x","tracked":true,"synced":true}
+{"name":"main","remote":"origin","present":true,"target":"abc","change_id":"x","tracked":true,"synced":true}
 `
 	bookmarks, err := ParseBookmarkList([]byte(jsonl))
 	if err != nil {
@@ -63,9 +63,9 @@ func TestParseBookmarkList_FiltersGitRemote(t *testing.T) {
 }
 
 func TestParseBookmarkList_MultipleBookmarks(t *testing.T) {
-	jsonl := `{"name":"main","remote":null,"present":true,"target":"aaa","change_id":"xa","tracked":false,"ahead":0,"behind":0}
-{"name":"feat-branch","remote":null,"present":true,"target":"bbb","change_id":"xb","tracked":false,"ahead":0,"behind":0}
-{"name":"feat-branch","remote":"origin","present":true,"target":"ccc","change_id":"xc","tracked":true,"ahead":0,"behind":1}
+	jsonl := `{"name":"main","remote":null,"present":true,"target":"aaa","change_id":"xa","tracked":false,"synced":false}
+{"name":"feat-branch","remote":null,"present":true,"target":"bbb","change_id":"xb","tracked":false,"synced":false}
+{"name":"feat-branch","remote":"origin","present":true,"target":"ccc","change_id":"xc","tracked":true,"synced":false}
 `
 	bookmarks, err := ParseBookmarkList([]byte(jsonl))
 	if err != nil {
@@ -81,15 +81,15 @@ func TestParseBookmarkList_MultipleBookmarks(t *testing.T) {
 	if bookmarks[1].Name != "feat-branch" {
 		t.Errorf("expected second bookmark 'feat-branch', got %q", bookmarks[1].Name)
 	}
-	// feat-branch should have origin remote with behind=1.
+	// feat-branch origin remote should not be synced (different targets).
 	rs := bookmarks[1].Remotes["origin"]
-	if rs.Behind != 1 {
-		t.Errorf("expected behind=1, got %d", rs.Behind)
+	if rs.Synced {
+		t.Error("expected synced=false for feat-branch origin")
 	}
 }
 
 func TestParseBookmarkList_RemoteOnly(t *testing.T) {
-	jsonl := `{"name":"remote-branch","remote":"origin","present":true,"target":"abc","change_id":"x","tracked":false,"ahead":0,"behind":0}
+	jsonl := `{"name":"remote-branch","remote":"origin","present":true,"target":"abc","change_id":"x","tracked":false,"synced":false}
 `
 	bookmarks, err := ParseBookmarkList([]byte(jsonl))
 	if err != nil {
@@ -121,9 +121,9 @@ func TestParseBookmarkList_MalformedJSON(t *testing.T) {
 }
 
 func TestParseBookmarkList_MultipleRemotes(t *testing.T) {
-	jsonl := `{"name":"main","remote":null,"present":true,"target":"aaa","change_id":"xa","tracked":false,"ahead":0,"behind":0}
-{"name":"main","remote":"origin","present":true,"target":"aaa","change_id":"xa","tracked":true,"ahead":0,"behind":0}
-{"name":"main","remote":"upstream","present":true,"target":"bbb","change_id":"xb","tracked":true,"ahead":1,"behind":0}
+	jsonl := `{"name":"main","remote":null,"present":true,"target":"aaa","change_id":"xa","tracked":false,"synced":false}
+{"name":"main","remote":"origin","present":true,"target":"aaa","change_id":"xa","tracked":true,"synced":true}
+{"name":"main","remote":"upstream","present":true,"target":"bbb","change_id":"xb","tracked":true,"synced":false}
 `
 	bookmarks, err := ParseBookmarkList([]byte(jsonl))
 	if err != nil {
@@ -136,8 +136,8 @@ func TestParseBookmarkList_MultipleRemotes(t *testing.T) {
 	if len(b.Remotes) != 2 {
 		t.Fatalf("expected 2 remotes, got %d", len(b.Remotes))
 	}
-	if b.Remotes["upstream"].Ahead != 1 {
-		t.Errorf("expected upstream ahead=1, got %d", b.Remotes["upstream"].Ahead)
+	if b.Remotes["upstream"].Synced {
+		t.Error("expected upstream synced=false")
 	}
 }
 
@@ -148,7 +148,7 @@ func TestSyncWith_InSync(t *testing.T) {
 		Present: true,
 		Target:  "abc",
 		Remotes: map[string]RemoteBookmarkState{
-			"origin": {Target: "abc", Tracked: true, Ahead: 0, Behind: 0},
+			"origin": {Target: "abc", Tracked: true, Synced: true},
 		},
 	}
 	if s := b.SyncWith("origin"); s != SyncInSync {
@@ -161,7 +161,7 @@ func TestSyncWith_Ahead(t *testing.T) {
 		Present: true,
 		Target:  "abc",
 		Remotes: map[string]RemoteBookmarkState{
-			"origin": {Target: "old", Tracked: true, Ahead: 0, Behind: 2},
+			"origin": {Target: "old", Tracked: true, Synced: false},
 		},
 	}
 	if s := b.SyncWith("origin"); s != SyncAhead {
@@ -169,29 +169,18 @@ func TestSyncWith_Ahead(t *testing.T) {
 	}
 }
 
-func TestSyncWith_Behind(t *testing.T) {
+func TestSyncWith_TargetsDiffer_NoConflict(t *testing.T) {
+	// When targets differ and there's no conflict, local is authoritative (pushable).
+	// This covers rebases, amends, and any case where the local moved.
 	b := &BookmarkInfo{
 		Present: true,
 		Target:  "abc",
 		Remotes: map[string]RemoteBookmarkState{
-			"origin": {Target: "new", Tracked: true, Ahead: 3, Behind: 0},
+			"origin": {Target: "xyz", Tracked: true, Synced: false},
 		},
 	}
-	if s := b.SyncWith("origin"); s != SyncBehind {
-		t.Errorf("expected SyncBehind, got %v", s)
-	}
-}
-
-func TestSyncWith_Diverged(t *testing.T) {
-	b := &BookmarkInfo{
-		Present: true,
-		Target:  "abc",
-		Remotes: map[string]RemoteBookmarkState{
-			"origin": {Target: "xyz", Tracked: true, Ahead: 1, Behind: 2},
-		},
-	}
-	if s := b.SyncWith("origin"); s != SyncDiverged {
-		t.Errorf("expected SyncDiverged, got %v", s)
+	if s := b.SyncWith("origin"); s != SyncAhead {
+		t.Errorf("expected SyncAhead, got %v", s)
 	}
 }
 
@@ -237,6 +226,182 @@ func TestSyncWith_NotPresent_NoRemote(t *testing.T) {
 	}
 	if s := b.SyncWith("origin"); s != SyncUnknown {
 		t.Errorf("expected SyncUnknown, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario1_FullySynced(t *testing.T) {
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "abc123",
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "abc123", Tracked: true, Synced: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncInSync {
+		t.Errorf("expected SyncInSync, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario2_LocalAheadFastForward(t *testing.T) {
+	// New commits on top of bookmarked commit. Push would fast-forward.
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "new456",
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "abc123", Tracked: true, Synced: false},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncAhead {
+		t.Errorf("expected SyncAhead, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario3_LocalRewritten(t *testing.T) {
+	// Bookmark was rebased/amended. Same change-id, different commit-id.
+	// Not synced, no conflict — pushable.
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "rebased789",
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "original123", Tracked: true, Synced: false},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncAhead {
+		t.Errorf("expected SyncAhead, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario4_LocalMovedUnrelated(t *testing.T) {
+	// Bookmark pointed to completely different commit via jj bookmark set.
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "unrelated999",
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "original123", Tracked: true, Synced: false},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncAhead {
+		t.Errorf("expected SyncAhead, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario5_RemoteAheadAfterFetch(t *testing.T) {
+	// After fetch, local fast-forwards to match remote — synced.
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "abc123",
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "abc123", Tracked: true, Synced: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncInSync {
+		t.Errorf("expected SyncInSync, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario6_LocalOnlyNeverPushed(t *testing.T) {
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "abc123",
+		Remotes: map[string]RemoteBookmarkState{},
+	}
+	if s := b.SyncWith("origin"); s != SyncLocalOnly {
+		t.Errorf("expected SyncLocalOnly, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario7_RemoteOnlyUntracked(t *testing.T) {
+	b := &BookmarkInfo{
+		Present: false,
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "abc123", Tracked: false},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncRemoteOnly {
+		t.Errorf("expected SyncRemoteOnly, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario8_RemoteOnlyTracked(t *testing.T) {
+	b := &BookmarkInfo{
+		Present: false,
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "abc123", Tracked: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncRemoteOnly {
+		t.Errorf("expected SyncRemoteOnly, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario9_LocalDeletedRemoteExists(t *testing.T) {
+	b := &BookmarkInfo{
+		Present: false,
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "abc123", Tracked: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncRemoteOnly {
+		t.Errorf("expected SyncRemoteOnly, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario11_BothMovedDiverged(t *testing.T) {
+	// Both local and remote moved independently → conflict.
+	b := &BookmarkInfo{
+		Present:  true,
+		Target:   "",
+		Conflict: true,
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "remote456", Tracked: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncDiverged {
+		t.Errorf("expected SyncDiverged, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario12_BothForcePushed(t *testing.T) {
+	// Both sides rewrote history → conflict.
+	b := &BookmarkInfo{
+		Present:  true,
+		Target:   "",
+		Conflict: true,
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "remote789", Tracked: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncDiverged {
+		t.Errorf("expected SyncDiverged, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario14_StaleRemote(t *testing.T) {
+	// Haven't fetched, remote moved. Templates look normal — local is ahead.
+	// The actual push failure is caught at push time by force-with-lease.
+	b := &BookmarkInfo{
+		Present: true,
+		Target:  "local123",
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "stale_old", Tracked: true, Synced: false},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncAhead {
+		t.Errorf("expected SyncAhead, got %v", s)
+	}
+}
+
+func TestSyncWith_Scenario15_ConflictedRemoteAgreesOneSide(t *testing.T) {
+	b := &BookmarkInfo{
+		Present:  true,
+		Target:   "",
+		Conflict: true,
+		Remotes: map[string]RemoteBookmarkState{
+			"origin": {Target: "one_side", Tracked: true},
+		},
+	}
+	if s := b.SyncWith("origin"); s != SyncDiverged {
+		t.Errorf("expected SyncDiverged, got %v", s)
 	}
 }
 

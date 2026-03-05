@@ -1140,6 +1140,172 @@ func TestIntegration_SendSkipsDescendantsOfConflicted(t *testing.T) {
 	}
 }
 
+func TestIntegration_SendAllowsPushAfterLocalRewrite(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create a change and send it (creates PR + pushes bookmark).
+	writeAndCommit(t, repoDir, "feature.go",
+		"package feature\n\nfunc Do() {}\n",
+		"feat: add feature")
+	changeID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{changeID},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("First send:\n%s", buf.String())
+
+	// Amend the change locally (creates a new commit for the same change ID).
+	// This simulates the common workflow: send a PR, get feedback, amend, re-send.
+	jjRun(t, repoDir, "edit", changeID)
+	writeFile(t, repoDir, "feature.go",
+		"package feature\n\nimport \"fmt\"\n\nfunc Do() string {\n\treturn fmt.Sprintf(\"done\")\n}\n")
+	jjRun(t, repoDir, "new", changeID)
+
+	// Log state for debugging.
+	t.Log("--- jj log after amend ---")
+	t.Log(jjRun(t, repoDir, "log", "-r", "all()"))
+
+	bookmarkData, err := runner.BookmarkList()
+	if err != nil {
+		t.Fatalf("BookmarkList: %v", err)
+	}
+	t.Logf("Bookmark list after amend:\n%s", string(bookmarkData))
+
+	// Parse bookmarks and log the sync state for debugging.
+	bookmarks, err := jj.ParseBookmarkList(bookmarkData)
+	if err != nil {
+		t.Fatalf("ParseBookmarkList: %v", err)
+	}
+	bmName := findBookmarkForChange(t, runner, changeID)
+	for _, b := range bookmarks {
+		if b.Name == bmName {
+			t.Logf("Bookmark %s: sync=%v remotes=%+v", b.Name, b.SyncWith("origin"), b.Remotes)
+		}
+	}
+
+	// Re-send: the amended change should be pushed successfully, not skipped.
+	// The old commit on origin should be replaced by the new amended commit.
+	buf.Reset()
+	err = executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{changeID},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Second send:\n%s", output)
+
+	if err != nil {
+		t.Fatalf("second send after amend should succeed, but got: %v\nOutput:\n%s", err, output)
+	}
+
+	if strings.Contains(output, "remote is ahead") {
+		t.Errorf("should not skip locally amended change, got:\n%s", output)
+	}
+	if strings.Contains(output, "Skipped") {
+		t.Errorf("should not skip any changes, got:\n%s", output)
+	}
+}
+
+func TestIntegration_SendAllowsPushAfterRebase(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create a change and send it.
+	writeAndCommit(t, repoDir, "feature.go",
+		"package feature\n\nfunc Do() {}\n",
+		"feat: add feature")
+	changeID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{changeID},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("First send:\n%s", buf.String())
+
+	// Advance main: add 15 commits on main and push.
+	// This simulates upstream changes being merged by others.
+	for i := 1; i <= 15; i++ {
+		jjRun(t, repoDir, "new", "main")
+		writeAndCommit(t, repoDir, fmt.Sprintf("other%d.go", i),
+			fmt.Sprintf("package other%d\n\nfunc Other%d() {}\n", i, i),
+			fmt.Sprintf("feat: unrelated change %d on main", i))
+		jjRun(t, repoDir, "bookmark", "set", "main", "-r", "@-")
+		jjRun(t, repoDir, "git", "push", "--bookmark", "main")
+	}
+
+	// Rebase our change onto the new main.
+	// This changes the change's parent (and therefore its commit ID).
+	jjRun(t, repoDir, "rebase", "-r", changeID, "-d", "main")
+
+	// Move working copy so revset resolves cleanly.
+	jjRun(t, repoDir, "new", changeID)
+
+	// Log state for debugging.
+	t.Log("--- jj log after rebase ---")
+	t.Log(jjRun(t, repoDir, "log", "-r", "all()"))
+
+	bookmarkData, err := runner.BookmarkList()
+	if err != nil {
+		t.Fatalf("BookmarkList: %v", err)
+	}
+	t.Logf("Bookmark list after rebase:\n%s", string(bookmarkData))
+
+	// Parse bookmarks and log the sync state for debugging.
+	bookmarks, err := jj.ParseBookmarkList(bookmarkData)
+	if err != nil {
+		t.Fatalf("ParseBookmarkList: %v", err)
+	}
+	bmName := findBookmarkForChange(t, runner, changeID)
+	for _, b := range bookmarks {
+		if b.Name == bmName {
+			t.Logf("Bookmark %s: sync=%v remotes=%+v", b.Name, b.SyncWith("origin"), b.Remotes)
+		}
+	}
+
+	// Re-send: the rebased change should be pushed successfully.
+	// Origin has the old commit (pre-rebase), local has the new commit (post-rebase).
+	// This should NOT be treated as "remote is ahead" — the local is the authoritative version.
+	buf.Reset()
+	err = executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{changeID},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Second send:\n%s", output)
+
+	if err != nil {
+		t.Fatalf("second send after rebase should succeed, but got: %v\nOutput:\n%s", err, output)
+	}
+
+	if strings.Contains(output, "remote is ahead") {
+		t.Errorf("should not skip rebased change, got:\n%s", output)
+	}
+	if strings.Contains(output, "Skipped") {
+		t.Errorf("should not skip any changes, got:\n%s", output)
+	}
+}
+
 // findBookmarkForChange returns the bookmark name associated with a change ID.
 func findBookmarkForChange(t *testing.T, runner jj.Runner, changeID string) string {
 	t.Helper()

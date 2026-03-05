@@ -44,8 +44,7 @@ func (s SyncState) String() string {
 type RemoteBookmarkState struct {
 	Target  string // commit ID on remote
 	Tracked bool   // whether this remote ref is tracked by jj
-	Ahead   int    // commits the remote is ahead of local
-	Behind  int    // commits the remote is behind local
+	Synced  bool   // local and remote agree (from jj's synced() template)
 }
 
 // BookmarkInfo holds the full state of a named bookmark across local and remotes.
@@ -59,6 +58,11 @@ type BookmarkInfo struct {
 }
 
 // SyncWith returns the sync state of this bookmark relative to the given remote.
+//
+// Push-safety determination follows jj's model: !conflict && !synced means the
+// bookmark can be pushed. When conflict is false and not synced, the local side
+// is authoritative — jj auto-fast-forwards on fetch, so a non-conflicting
+// difference means the local was deliberately moved (rebase, amend, etc.).
 func (b *BookmarkInfo) SyncWith(remote string) SyncState {
 	if b.Conflict {
 		return SyncDiverged
@@ -73,16 +77,11 @@ func (b *BookmarkInfo) SyncWith(remote string) SyncState {
 	if !b.Present {
 		return SyncRemoteOnly
 	}
-	if rs.Ahead > 0 && rs.Behind > 0 {
-		return SyncDiverged
+	if rs.Synced {
+		return SyncInSync
 	}
-	if rs.Behind > 0 {
-		return SyncAhead // local is ahead (remote is behind)
-	}
-	if rs.Ahead > 0 {
-		return SyncBehind // local is behind (remote is ahead)
-	}
-	return SyncInSync
+	// Not synced, no conflict — local is authoritative. Pushable.
+	return SyncAhead
 }
 
 // rawBookmarkEntry is the JSON structure from jj bookmark list template output.
@@ -94,8 +93,7 @@ type rawBookmarkEntry struct {
 	Target   string  `json:"target"`
 	ChangeID string  `json:"change_id"`
 	Tracked  bool    `json:"tracked"`
-	Ahead    int     `json:"ahead"`
-	Behind   int     `json:"behind"`
+	Synced   bool    `json:"synced"`
 }
 
 // ParseBookmarkList parses JSONL output from jj bookmark list --all-remotes
@@ -149,8 +147,7 @@ func ParseBookmarkList(data []byte) ([]BookmarkInfo, error) {
 			bs.info.Remotes[*e.Remote] = RemoteBookmarkState{
 				Target:  e.Target,
 				Tracked: e.Tracked,
-				Ahead:   e.Ahead,
-				Behind:  e.Behind,
+				Synced:  e.Synced,
 			}
 			// If no local entry exists, mark as remote-only with remote's change info.
 			if !bs.info.Present && bs.info.Target == "" {

@@ -34,8 +34,7 @@ const bookmarkListTemplate = "" +
 	`",\"target\":" ++ if(present && !conflict, json(normal_target.commit_id()), "\"\"") ++` +
 	`",\"change_id\":" ++ if(present && !conflict, json(normal_target.change_id()), "\"\"") ++` +
 	`",\"tracked\":" ++ if(remote && tracked, "true", "false") ++` +
-	`",\"ahead\":" ++ if(remote && tracked, if(tracking_ahead_count.exact(), tracking_ahead_count.exact(), "0"), "0") ++` +
-	`",\"behind\":" ++ if(remote && tracked, if(tracking_behind_count.exact(), tracking_behind_count.exact(), "0"), "0") ++` +
+	`",\"synced\":" ++ if(remote && tracked, if(synced, "true", "false"), "false") ++` +
 	`"}\n"`
 
 // Runner executes jj commands and returns their output.
