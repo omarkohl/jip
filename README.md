@@ -9,9 +9,12 @@ request. When you update a PR, jip posts a comment showing what you changed
 
 ## Features
 
-- **One commit = one PR** — each commit gets its own focused, reviewable PR,
+- **One commit == one PR** — each commit gets its own focused, reviewable PR,
   with title and description taken from the commit message
-- **Review comments on update** — when you update a PR, jip posts a diff
+- **1-step PR creation** — By default you need to create a bookmark (branch),
+  push it and finally open the PR with title and description. `jip send` does
+  all that in one command.
+- **Diff comments on update** — when you update a PR, jip posts a diff
   showing only what you changed (rebase noise is filtered out)
 - **Automatic bookmarks** — no need to manually create jj bookmarks
 - **Supports forks** — works both for repositories where you have write access as well as forked ones
