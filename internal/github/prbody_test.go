@@ -194,6 +194,43 @@ func TestDiffStats(t *testing.T) {
 	}
 }
 
+func TestBuildDiffComment_DiffContainingCodeFences(t *testing.T) {
+	// A diff of a markdown file that itself contains fenced code blocks.
+	// The triple backticks inside the diff must not break the outer code fence.
+	diff := `diff --git a/docs/setup.md b/docs/setup.md
+--- a/docs/setup.md
++++ b/docs/setup.md
+@@ -10,6 +10,10 @@
+ ## Installation
+
++Run the following command:
++
++` + "```" + `bash
++go install example.com/tool@latest
++` + "```" + `
++
+ ## Configuration
+`
+	result := BuildDiffComment(diff, "owner/repo", "main", "abc1234567890", "def4567890abc")
+
+	// The output must contain the footer (which comes after the diff block).
+	// If triple backticks in the diff prematurely close the fence, the footer
+	// will be rendered as raw markdown inside the details block.
+	if !strings.Contains(result, "View the diff on") {
+		t.Errorf("expected footer to be present, got:\n%s", result)
+	}
+
+	// The outer fence must use more backticks than any sequence in the content.
+	if strings.Contains(result, "\n```diff\n") {
+		t.Errorf("outer fence should use more than 3 backticks when diff contains triple backticks, got:\n%s", result)
+	}
+
+	// Verify the longer fence is used.
+	if !strings.Contains(result, "````") {
+		t.Errorf("expected 4+ backtick fence, got:\n%s", result)
+	}
+}
+
 func TestRangeDiffFooter_Empty(t *testing.T) {
 	result := rangeDiffFooter("", "main", "old", "new")
 	if result != "" {

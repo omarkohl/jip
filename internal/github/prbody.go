@@ -92,8 +92,9 @@ func BuildDiffComment(codeDiff, repoName, baseBranch, oldCommit, newCommit strin
 		if expand {
 			openAttr = " open"
 		}
-		fmt.Fprintf(&b, "\n<details%s>\n<summary><code>%s</code> (+%d, -%d)</summary>\n\n```diff\n%s\n```\n\n</details>\n",
-			openAttr, f.header, added, removed, f.body)
+		fence := codeFence(f.body)
+		fmt.Fprintf(&b, "\n<details%s>\n<summary><code>%s</code> (+%d, -%d)</summary>\n\n%sdiff\n%s\n%s\n\n</details>\n",
+			openAttr, f.header, added, removed, fence, f.body, fence)
 	}
 
 	b.WriteString(footer)
@@ -162,6 +163,28 @@ func diffStats(chunk string) (added, removed int) {
 		}
 	}
 	return
+}
+
+// codeFence returns a backtick fence long enough to safely wrap content.
+// If the content contains N consecutive backticks, the fence uses N+1.
+func codeFence(content string) string {
+	maxRun := 0
+	run := 0
+	for _, c := range content {
+		if c == '`' {
+			run++
+			if run > maxRun {
+				maxRun = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	n := 3
+	if maxRun >= n {
+		n = maxRun + 1
+	}
+	return strings.Repeat("`", n)
 }
 
 func minInt(a, b int) int {
