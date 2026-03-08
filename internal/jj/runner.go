@@ -84,10 +84,15 @@ func (r *realRunner) Log(revset string) ([]byte, error) {
 	}
 	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
-	out, err := cmd.CombinedOutput()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
-		return nil, fmt.Errorf("jj log: %w\n%s", err, strings.TrimSpace(string(out)))
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)), "stderr", strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("jj log: %w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		slog.Debug("jj log stderr", "stderr", s)
 	}
 	slog.Debug("jj exec ok", "bytes", len(out))
 	return out, nil
@@ -103,10 +108,15 @@ func (r *realRunner) BookmarkList() ([]byte, error) {
 	}
 	logCmd("jj", args)
 	cmd := exec.Command("jj", args...)
-	out, err := cmd.CombinedOutput()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)))
-		return nil, fmt.Errorf("jj bookmark list: %w\n%s", err, strings.TrimSpace(string(out)))
+		slog.Debug("jj exec failed", "err", err, "output", strings.TrimSpace(string(out)), "stderr", strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("jj bookmark list: %w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		slog.Debug("jj bookmark list stderr", "stderr", s)
 	}
 	slog.Debug("jj exec ok", "bytes", len(out))
 	return out, nil

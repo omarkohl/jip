@@ -211,6 +211,40 @@ func TestIntegration_OverlappingRevsetsThreeDAGs(t *testing.T) {
 	}
 }
 
+func TestIntegration_LogWithStderrWarnings(t *testing.T) {
+	dir := initJJRepo(t)
+	runner := NewRunner(dir)
+
+	// Create a normal commit.
+	writeAndCommit(t, dir, "a.txt", "aaa", "first change")
+
+	// Create a file that exceeds jj's default snapshot limit (1 MiB) to
+	// trigger a "Warning: Refused to snapshot some files" on stderr.
+	bigFile := filepath.Join(dir, "big.bin")
+	if err := os.WriteFile(bigFile, make([]byte, 2*1024*1024), 0644); err != nil {
+		t.Fatalf("writing big file: %v", err)
+	}
+
+	logRepoState(t, dir)
+
+	// Log must succeed despite jj writing warnings to stderr.
+	dags, err := ResolveStacks(runner, []string{"@-"}, "main")
+	if err != nil {
+		t.Fatalf("ResolveStacks: %v (stderr warnings likely contaminated stdout)", err)
+	}
+	logDAGs(t, dags)
+
+	if len(dags) != 1 {
+		t.Fatalf("expected 1 DAG, got %d", len(dags))
+	}
+	if len(dags[0].Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(dags[0].Changes))
+	}
+	if dags[0].Changes[0].Description != "first change" {
+		t.Errorf("expected 'first change', got %q", dags[0].Changes[0].Description)
+	}
+}
+
 // logRepoState logs the jj log output for manual inspection.
 func logRepoState(t *testing.T, dir string) {
 	t.Helper()
