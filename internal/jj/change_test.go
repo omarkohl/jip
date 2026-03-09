@@ -267,6 +267,58 @@ func TestParseAndBuildDAGs_RoundTrip(t *testing.T) {
 	}
 }
 
+// --- Title / Body split tests ---
+
+func TestChange_Title_SingleLine(t *testing.T) {
+	c := Change{Description: "feat: add login"}
+	if c.Title() != "feat: add login" {
+		t.Errorf("expected title 'feat: add login', got %q", c.Title())
+	}
+}
+
+func TestChange_Body_SingleLine(t *testing.T) {
+	c := Change{Description: "feat: add login"}
+	if c.Body() != "" {
+		t.Errorf("expected empty body for single-line description, got %q", c.Body())
+	}
+}
+
+func TestChange_Title_MultiLine(t *testing.T) {
+	c := Change{Description: "feat: add login\n\nThis implements OAuth2 login flow\nwith refresh tokens."}
+	if c.Title() != "feat: add login" {
+		t.Errorf("expected title 'feat: add login', got %q", c.Title())
+	}
+}
+
+func TestChange_Body_MultiLine(t *testing.T) {
+	c := Change{Description: "feat: add login\n\nThis implements OAuth2 login flow\nwith refresh tokens."}
+	expected := "This implements OAuth2 login flow\nwith refresh tokens."
+	if c.Body() != expected {
+		t.Errorf("expected body %q, got %q", expected, c.Body())
+	}
+}
+
+func TestChange_Body_BlankLineSeparator(t *testing.T) {
+	c := Change{Description: "fix: bug\n\ndetails here"}
+	if c.Body() != "details here" {
+		t.Errorf("expected body 'details here', got %q", c.Body())
+	}
+}
+
+func TestChange_Title_Empty(t *testing.T) {
+	c := Change{Description: ""}
+	if c.Title() != "" {
+		t.Errorf("expected empty title, got %q", c.Title())
+	}
+}
+
+func TestChange_Body_Empty(t *testing.T) {
+	c := Change{Description: ""}
+	if c.Body() != "" {
+		t.Errorf("expected empty body, got %q", c.Body())
+	}
+}
+
 // --- Test helpers ---
 
 // mustBuildDAGs calls BuildDAGs and fails the test on error.

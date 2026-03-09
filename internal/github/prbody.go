@@ -47,7 +47,7 @@ func BuildStackedPRBody(commitHash, repoFullName string, prNumber int, allPRs []
 	b.WriteString(BuildStackBlock(allPRs, prNumber))
 
 	if commitBody != "" {
-		b.WriteString("\n---\n\n")
+		b.WriteString("\n---\n\n## Description\n\n")
 		b.WriteString(commitBody)
 		b.WriteString("\n")
 	}

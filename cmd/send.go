@@ -369,7 +369,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			if !s.bookmark.IsNew {
 				bmStatus = "existing"
 			}
-			_, _ = fmt.Fprintf(w, "  %s  %.12s  %s\n", action, s.change.ChangeID, s.change.Description)
+			_, _ = fmt.Fprintf(w, "  %s  %.12s  %s\n", action, s.change.ChangeID, s.change.Title())
 			_, _ = fmt.Fprintf(w, "         bookmark: %s (%s)\n", s.bookmark.Bookmark, bmStatus)
 		}
 		if len(skippedStates) > 0 {
@@ -397,8 +397,8 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			s := &activeStates[i]
 			if s.pr != nil {
 				// Existing PR — update title if changed, post interdiff comment.
-				if s.pr.Title != s.change.Description {
-					title := s.change.Description
+				if s.pr.Title != s.change.Title() {
+					title := s.change.Title()
 					if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Title: &title}); err != nil {
 						return fmt.Errorf("updating PR #%d title: %w", s.pr.Number, err)
 					}
@@ -423,7 +423,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				}
 			} else {
 				// New PR — create it.
-				title := s.change.Description
+				title := s.change.Title()
 				if title == "" {
 					title = fmt.Sprintf("jip: %.12s", s.change.ChangeID)
 				}
@@ -431,7 +431,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				if opts.pushOwner != "" {
 					head = opts.pushOwner + ":" + head
 				}
-				pr, err := client.CreatePR(head, opts.base, title, "", opts.draft)
+				pr, err := client.CreatePR(head, opts.base, title, s.change.Body(), opts.draft)
 				if err != nil {
 					return fmt.Errorf("creating PR for %s: %w", s.change.ChangeID, err)
 				}
@@ -458,7 +458,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 					repoFullName,
 					s.pr.Number,
 					perChangeStack[i],
-					"", // commit body — we only have the first line in Description
+					s.change.Body(),
 				)
 				if body != s.pr.Body {
 					if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Body: &body}); err != nil {
@@ -479,7 +479,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				action = "up-to-date"
 			}
 			_, _ = fmt.Fprintf(w, "  #%-4d %s  %s\n", s.pr.Number, action, s.pr.URL)
-			_, _ = fmt.Fprintf(w, "         %.12s  %s\n", s.change.ChangeID, s.change.Description)
+			_, _ = fmt.Fprintf(w, "         %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		}
 	}
 
@@ -555,7 +555,7 @@ func printSkippedChanges(w io.Writer, skipped []changeState, reasons map[string]
 	_, _ = fmt.Fprintf(w, "\nSkipped %d change(s):\n\n", len(skipped))
 	for _, s := range skipped {
 		r := reasons[s.change.ChangeID]
-		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Description)
+		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		_, _ = fmt.Fprintf(w, "         %s\n", r.reason)
 	}
 }

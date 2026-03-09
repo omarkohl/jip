@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Change represents a single jj change in a stack.
@@ -15,6 +16,26 @@ type Change struct {
 	Conflict    bool     `json:"conflict"`
 	ParentIDs   []string `json:"parent_ids"`
 	Bookmarks   []string `json:"bookmarks"`
+}
+
+// Title returns the first line of the description (the commit subject).
+func (c *Change) Title() string {
+	if i := strings.Index(c.Description, "\n"); i >= 0 {
+		return c.Description[:i]
+	}
+	return c.Description
+}
+
+// Body returns everything after the first blank line separator in the
+// description, trimmed of leading/trailing whitespace. Returns "" if there
+// is no body.
+func (c *Change) Body() string {
+	// Convention: title, blank line, body.
+	idx := strings.Index(c.Description, "\n\n")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(c.Description[idx+2:])
 }
 
 // ChangeDAG is a connected DAG of changes. Changes are topologically sorted
@@ -33,6 +54,8 @@ func ParseChanges(data []byte) ([]Change, error) {
 		if err := dec.Decode(&c); err != nil {
 			return nil, fmt.Errorf("parsing change: %w", err)
 		}
+		// jj's description template includes a trailing newline; trim it.
+		c.Description = strings.TrimRight(c.Description, "\n")
 		changes = append(changes, c)
 	}
 	return changes, nil

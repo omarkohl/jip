@@ -49,6 +49,9 @@ func TestBuildStackedPRBody_WithStack(t *testing.T) {
 	if !strings.Contains(body, "Some description") {
 		t.Error("expected commit body")
 	}
+	if !strings.Contains(body, "## Description") {
+		t.Errorf("expected '## Description' heading before commit body in stacked PR, got:\n%s", body)
+	}
 	if !strings.Contains(body, "[^1]:") {
 		t.Error("expected footnote")
 	}
@@ -57,10 +60,34 @@ func TestBuildStackedPRBody_WithStack(t *testing.T) {
 	}
 }
 
+func TestBuildStackedPRBody_WithStack_DescriptionHeadingPosition(t *testing.T) {
+	body := BuildStackedPRBody("abcdef1234567890", "owner/repo", 2, []int{1, 2, 3}, "My detailed description")
+	// ## Description should appear after the --- divider and before the commit body
+	descrIdx := strings.Index(body, "## Description")
+	dividerIdx := strings.Index(body, "---")
+	bodyIdx := strings.Index(body, "My detailed description")
+	if descrIdx < dividerIdx {
+		t.Errorf("expected ## Description after --- divider, got:\n%s", body)
+	}
+	if bodyIdx < descrIdx {
+		t.Errorf("expected commit body after ## Description heading, got:\n%s", body)
+	}
+}
+
+func TestBuildStackedPRBody_WithStack_NoBody(t *testing.T) {
+	body := BuildStackedPRBody("abcdef1234567890", "owner/repo", 2, []int{1, 2, 3}, "")
+	if strings.Contains(body, "## Description") {
+		t.Errorf("should not contain ## Description when commit body is empty, got:\n%s", body)
+	}
+}
+
 func TestBuildStackedPRBody_NoStack(t *testing.T) {
 	body := BuildStackedPRBody("abc123", "owner/repo", 1, []int{1}, "my body")
 	if strings.Contains(body, "stacked PR") {
 		t.Error("expected no stacked PR intro for single PR")
+	}
+	if strings.Contains(body, "## Description") {
+		t.Error("should not contain ## Description heading for non-stacked PR")
 	}
 	if body != "my body" {
 		t.Errorf("expected plain commit body for single PR, got %q", body)
