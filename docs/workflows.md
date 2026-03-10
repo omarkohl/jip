@@ -210,7 +210,7 @@ Your jj log now looks something like:
 ```
 @  kkvmxlpw alice@example.com 2026-03-10 21:07:13 a1b2c3d4
 │  (empty) (no description set)
-○          ppnrqxyz alice@example.com 2026-03-10 21:06:32 e5f6a7b8
+○        ppnrqxyz alice@example.com 2026-03-10 21:06:32 e5f6a7b8
 ├─┬─┬─╮  private: local merge
 │ │ │ ○  wxrstuvq alice@example.com 2026-03-10 10:13:07 c9d0e1f2
 │ │ │ │  feat: support environment variable overrides
