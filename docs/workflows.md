@@ -156,6 +156,111 @@ rather than one PR per commit. The reviewer sees one PR with the full diff from
 
 ---
 
+## Batch workflow: many independent PRs at once
+
+You're contributing to a project and have several independent fixes and
+improvements. Instead of sending them one by one, you create all changes
+branching from `main` and send them in one go.
+
+### Setting up the changes
+
+```bash
+# Fix 1
+jj new main
+# ... edit files ...
+jj commit -m "fix: set default config path in Dockerfiles"
+
+# Fix 2
+jj new main
+# ... edit files ...
+jj commit -m "feat: add health check endpoint"
+
+# Fix 3: a small stack (two related changes)
+jj new main
+# ... edit files ...
+jj commit -m "docs: add getting started section to README"
+# ... edit more files ...
+jj commit -m "nit: fix typos in README"
+
+# Fix 4
+jj new main
+# ... edit files ...
+jj commit -m "feat: support environment variable overrides"
+```
+
+Now merge all branches together so you have a single working copy on top:
+
+```bash
+# See the "jj log" below to identify the change-ids
+jj new zyx ab mno wx -m "private: local merge"
+```
+
+The `private:` prefix is key — if configured, jip skips private changes, so the
+merge commit won't get its own PR. To make this work, configure private commits
+in `~/.config/jj/config.toml`:
+
+```toml
+[git]
+# Ensure commit messages prefixed with "wip:" or "private:" are not pushed
+private-commits = "description(glob-i:'wip:*') | description(glob-i:'private:*')"
+```
+
+Your jj log now looks something like:
+
+```
+@  kkvmxlpw alice@example.com 2026-03-10 21:07:13 a1b2c3d4
+│  (empty) (no description set)
+○          ppnrqxyz alice@example.com 2026-03-10 21:06:32 e5f6a7b8
+├─┬─┬─╮  private: local merge
+│ │ │ ○  wxrstuvq alice@example.com 2026-03-10 10:13:07 c9d0e1f2
+│ │ │ │  feat: support environment variable overrides
+│ │ ○ │  mnopqrst alice@example.com 2026-03-10 10:39:57 3a4b5c6d
+│ │ │ │  nit: fix typos in README
+│ │ ○ │  ghijklmn alice@example.com 2026-03-10 10:38:12 7e8f9a0b
+│ │ ├─╯  docs: add getting started section to README
+│ ○ │  abcdefgh alice@example.com 2026-03-10 10:20:00 1c2d3e4f
+│ ├─╯  feat: add health check endpoint
+○ │  zyxwvuts alice@example.com 2026-03-10 10:05:00 5a6b7c8d
+├─╯  fix: set default config path in Dockerfiles
+◆  tzmypqws maintainer@example.com 2026-03-10 06:21:07 main 49ea0086
+│  Fix lint errors (#591)
+```
+
+### Sending all PRs at once
+
+```bash
+jip send
+```
+
+jip walks all ancestors of `@`, skips the private merge commit, and creates a
+PR for each change (or a stacked PR for the README chain). One command,
+multiple PRs.
+
+### Updating after review feedback
+
+```bash
+# Fix the config path commit
+jj new zyx
+# ... make changes ...
+jj squash
+
+# Update all PRs
+jj rebase -b ppn -o main
+jip send ppn
+
+# Or rebase and send in one step
+jip send --rebase ppn
+```
+
+If you only want to update PRs that already exist on GitHub (without creating
+new ones), use `--existing`:
+
+```bash
+jip send --existing
+```
+
+---
+
 ## FAQ
 
 ### How do I update a commit in the middle of a stack?
