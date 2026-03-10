@@ -698,7 +698,8 @@ func TestIntegration_SendFetchesUpstreamRemote(t *testing.T) {
 	}
 	jjRun(t, repoDir, "git", "remote", "add", "upstream", upstreamDir)
 	// Push main to upstream so fetch succeeds.
-	jjRun(t, repoDir, "git", "push", "--remote", "upstream", "--bookmark", "main", "--allow-new")
+	jjRun(t, repoDir, "bookmark", "track", "main", "--remote", "upstream")
+	jjRun(t, repoDir, "git", "push", "--remote", "upstream", "-b", "main")
 
 	spy := &spyRunner{Runner: jj.NewRunner(repoDir)}
 
@@ -1652,9 +1653,9 @@ func (s *spyRunner) GitFetch(remote string) error {
 	return s.Runner.GitFetch(remote)
 }
 
-func (s *spyRunner) GitPush(bookmarks []string, allowNew bool, remote string) error {
+func (s *spyRunner) GitPush(bookmarks []string, remote string) error {
 	s.pushRemote = remote
-	return s.Runner.GitPush(bookmarks, allowNew, remote)
+	return s.Runner.GitPush(bookmarks, remote)
 }
 
 func (s *spyRunner) Rebase(revsets []string, destination string) error {

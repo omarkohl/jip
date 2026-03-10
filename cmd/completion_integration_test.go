@@ -21,7 +21,7 @@ func TestIntegration_CompleteJJRevsets(t *testing.T) {
 
 	// Push a bookmark so we also get remote bookmark completions.
 	jjRun(t, repoDir, "bookmark", "set", "mybranch", "-r", "@-")
-	jjRun(t, repoDir, "git", "push", "--bookmark", "mybranch", "--allow-new")
+	jjRun(t, repoDir, "git", "push", "--bookmark", "mybranch")
 
 	oldDir, err := os.Getwd()
 	if err != nil {

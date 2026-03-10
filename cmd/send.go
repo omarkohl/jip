@@ -461,7 +461,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 		_, _ = fmt.Fprintf(w, "\nPushing %d bookmark(s)...\n", len(pushBookmarks))
 
-		if err := runner.GitPush(pushBookmarks, true, opts.remote); err != nil {
+		if err := runner.GitPush(pushBookmarks, opts.remote); err != nil {
 			// Batch push failed — try each bookmark individually.
 			_, _ = fmt.Fprintf(w, "Batch push failed, retrying individually...\n")
 			pushFailed := make(map[string]string) // changeID -> error
@@ -483,7 +483,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 					pushFailed[s.change.ChangeID] = "skipped because ancestor could not be pushed"
 					continue
 				}
-				if err := runner.GitPush([]string{s.bookmark.Bookmark}, true, opts.remote); err != nil {
+				if err := runner.GitPush([]string{s.bookmark.Bookmark}, opts.remote); err != nil {
 					pushFailed[s.change.ChangeID] = extractPushError(err)
 				}
 			}

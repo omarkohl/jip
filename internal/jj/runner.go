@@ -55,8 +55,8 @@ type Runner interface {
 	GitFetch(remote string) error
 
 	// GitPush pushes the given bookmarks. remote optionally specifies the
-	// push target (empty = jj default). allowNew permits new remote branches.
-	GitPush(bookmarks []string, allowNew bool, remote string) error
+	// push target (empty = jj default).
+	GitPush(bookmarks []string, remote string) error
 
 	// Interdiff returns the diff between two revisions using jj interdiff --git.
 	Interdiff(from, to string) (string, error)
@@ -172,7 +172,7 @@ func (r *realRunner) GitFetch(remote string) error {
 	})
 }
 
-func (r *realRunner) GitPush(bookmarks []string, allowNew bool, remote string) error {
+func (r *realRunner) GitPush(bookmarks []string, remote string) error {
 	return retry.Do(func() error {
 		args := []string{"git", "push", "-R", r.repoDir}
 		if remote != "" {
@@ -180,9 +180,6 @@ func (r *realRunner) GitPush(bookmarks []string, allowNew bool, remote string) e
 		}
 		for _, b := range bookmarks {
 			args = append(args, "-b", b)
-		}
-		if allowNew {
-			args = append(args, "--allow-new")
 		}
 		logCmd("jj", args)
 		cmd := exec.Command("jj", args...)
