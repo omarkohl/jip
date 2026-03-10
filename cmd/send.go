@@ -55,6 +55,12 @@ type sendOpts struct {
 	revsets        []string
 }
 
+// skippedEntry records a change that was pre-skipped (before bookmark creation).
+type skippedEntry struct {
+	change *jj.Change
+	reason skipReason
+}
+
 // changeState tracks the state of each change through the send pipeline.
 type changeState struct {
 	change   *jj.Change
@@ -221,7 +227,72 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 	}
 
-	// 3. Get existing bookmarks.
+	// 3. Pre-skip: remove changes that must not be pushed (empty description,
+	// private commits) plus their descendants, before creating bookmarks.
+	preSkipIDs := make(map[string]skipReason)
+
+	// Detect private commits using jj's own revset evaluation.
+	privateIDs, err := jj.FindPrivateChanges(runner, dags)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "warning: could not check for private commits: %v\n", err)
+	}
+	for id := range privateIDs {
+		preSkipIDs[id] = skipReason{
+			reason: "change is private (matches git.private-commits)",
+		}
+	}
+
+	// Detect empty descriptions + propagate to descendants.
+	// DAGs are topologically sorted (roots first), so ancestor propagation works.
+	for _, dag := range dags {
+		for _, c := range dag.Changes {
+			if _, ok := preSkipIDs[c.ChangeID]; ok {
+				continue
+			}
+			for _, pid := range c.ParentIDs {
+				if _, ok := preSkipIDs[pid]; ok {
+					preSkipIDs[c.ChangeID] = skipReason{
+						reason:   "skipped because ancestor was skipped",
+						ancestor: pid,
+					}
+					break
+				}
+			}
+			if _, ok := preSkipIDs[c.ChangeID]; ok {
+				continue
+			}
+			if strings.TrimSpace(c.Description) == "" {
+				preSkipIDs[c.ChangeID] = skipReason{
+					reason: "change has no description — add a commit message before sending",
+				}
+			}
+		}
+	}
+
+	// Collect pre-skipped changes for reporting; filter DAGs.
+	var preSkippedChanges []skippedEntry
+	if len(preSkipIDs) > 0 {
+		for _, dag := range dags {
+			for _, c := range dag.Changes {
+				if r, ok := preSkipIDs[c.ChangeID]; ok {
+					preSkippedChanges = append(preSkippedChanges, skippedEntry{change: c, reason: r})
+				}
+			}
+		}
+		var filteredDAGs []*jj.ChangeDAG
+		for _, dag := range dags {
+			if fd := jj.FilterDAG(dag, preSkipIDs); fd != nil {
+				filteredDAGs = append(filteredDAGs, fd)
+			}
+		}
+		dags = filteredDAGs
+		if len(dags) == 0 && !opts.dryRun {
+			printPreSkippedChanges(w, preSkippedChanges)
+			return fmt.Errorf("%d change(s) skipped — nothing to send", len(preSkippedChanges))
+		}
+	}
+
+	// 4. Get existing bookmarks.
 	bookmarkData, err := runner.BookmarkList()
 	if err != nil {
 		return fmt.Errorf("listing bookmarks: %w", err)
@@ -264,7 +335,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		prMap = make(map[string]*gh.PRInfo)
 	}
 
-	// 4. Process each DAG.
+	// 5. Process each DAG: ensure bookmarks.
 	var allStates []changeState
 
 	for _, dag := range dags {
@@ -317,7 +388,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 	}
 
-	// Detect diverged/behind bookmarks and skip them (plus descendants).
+	// 6. Detect diverged/behind bookmarks and skip them (plus descendants).
 	skippedIDs := make(map[string]skipReason)
 
 	for _, s := range allStates {
@@ -372,27 +443,67 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			_, _ = fmt.Fprintf(w, "  %s  %.12s  %s\n", action, s.change.ChangeID, s.change.Title())
 			_, _ = fmt.Fprintf(w, "         bookmark: %s (%s)\n", s.bookmark.Bookmark, bmStatus)
 		}
-		if len(skippedStates) > 0 {
-			printSkippedChanges(w, skippedStates, skippedIDs)
+		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
+			printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
 		}
-		if len(skippedStates) > 0 {
-			return fmt.Errorf("%d change(s) skipped due to conflicts or diverged bookmarks", len(skippedStates))
+		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
+			return fmt.Errorf("%d change(s) skipped", len(skippedStates)+len(preSkippedChanges))
 		}
 		return nil
 	}
 
 	if len(activeStates) > 0 {
-		// 5. Push all bookmarks.
+		// 7. Push bookmarks. Try batch first; on failure, push individually
+		// so that independent bookmarks can still proceed.
 		var pushBookmarks []string
 		for _, s := range activeStates {
 			pushBookmarks = append(pushBookmarks, s.bookmark.Bookmark)
 		}
 		_, _ = fmt.Fprintf(w, "\nPushing %d bookmark(s)...\n", len(pushBookmarks))
-		if err := runner.GitPush(pushBookmarks, true, opts.remote); err != nil {
-			return fmt.Errorf("pushing: %w", err)
-		}
 
-		// 6. Create/update PRs.
+		if err := runner.GitPush(pushBookmarks, true, opts.remote); err != nil {
+			// Batch push failed — try each bookmark individually.
+			_, _ = fmt.Fprintf(w, "Batch push failed, retrying individually...\n")
+			pushFailed := make(map[string]string) // changeID -> error
+			// Build bookmark→changeID map.
+			bmToChange := make(map[string]string, len(activeStates))
+			for _, s := range activeStates {
+				bmToChange[s.bookmark.Bookmark] = s.change.ChangeID
+			}
+			for _, s := range activeStates {
+				// Skip if an ancestor already failed.
+				ancestorFailed := false
+				for _, pid := range s.change.ParentIDs {
+					if _, ok := pushFailed[pid]; ok {
+						ancestorFailed = true
+						break
+					}
+				}
+				if ancestorFailed {
+					pushFailed[s.change.ChangeID] = "skipped because ancestor could not be pushed"
+					continue
+				}
+				if err := runner.GitPush([]string{s.bookmark.Bookmark}, true, opts.remote); err != nil {
+					pushFailed[s.change.ChangeID] = extractPushError(err)
+				}
+			}
+			if len(pushFailed) > 0 {
+				var newActive []changeState
+				for _, s := range activeStates {
+					if reason, failed := pushFailed[s.change.ChangeID]; failed {
+						skippedIDs[s.change.ChangeID] = skipReason{reason: reason}
+						skippedStates = append(skippedStates, s)
+					} else {
+						newActive = append(newActive, s)
+					}
+				}
+				activeStates = newActive
+			}
+		}
+	}
+
+	if len(activeStates) > 0 {
+		// 8. Create/update PRs.
 		for i := range activeStates {
 			s := &activeStates[i]
 			if s.pr != nil {
@@ -446,7 +557,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 7. Update all PR bodies with stack navigation (skip when --no-stack).
+		// 9. Update all PR bodies with stack navigation (skip when --no-stack).
 		if !opts.noStack {
 			// Each PR's stack only includes its ancestors and descendants (its
 			// dependency chain), not unrelated branches in the same DAG.
@@ -469,7 +580,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 8. Print summary.
+		// 10. Print summary.
 		_, _ = fmt.Fprintf(w, "\n%d PR(s) sent:\n\n", len(activeStates))
 		for _, s := range activeStates {
 			action := "updated"
@@ -483,9 +594,10 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 	}
 
-	if len(skippedStates) > 0 {
-		printSkippedChanges(w, skippedStates, skippedIDs)
-		return fmt.Errorf("%d change(s) skipped due to conflicts or diverged bookmarks", len(skippedStates))
+	totalSkipped := len(skippedStates) + len(preSkippedChanges)
+	if totalSkipped > 0 {
+		printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
+		return fmt.Errorf("%d change(s) skipped", totalSkipped)
 	}
 	return nil
 }
@@ -550,11 +662,38 @@ func computeStackPRs(states []changeState) [][]int {
 	return result
 }
 
-// printSkippedChanges reports changes that were skipped due to diverged/behind bookmarks.
-func printSkippedChanges(w io.Writer, skipped []changeState, reasons map[string]skipReason) {
+// extractPushError extracts a clean reason from a jj git push error.
+// It looks for an "Error:" line in the output; falls back to the full message.
+func extractPushError(err error) string {
+	msg := err.Error()
+	for _, line := range strings.Split(msg, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Error:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Error:"))
+		}
+	}
+	return msg
+}
+
+// printPreSkippedChanges reports changes that were pre-skipped (before bookmark creation).
+func printPreSkippedChanges(w io.Writer, skipped []skippedEntry) {
 	_, _ = fmt.Fprintf(w, "\nSkipped %d change(s):\n\n", len(skipped))
 	for _, s := range skipped {
-		r := reasons[s.change.ChangeID]
+		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
+		_, _ = fmt.Fprintf(w, "         %s\n", s.reason.reason)
+	}
+}
+
+// printAllSkipped reports all skipped changes (both pre-skip and post-bookmark-creation).
+func printAllSkipped(w io.Writer, postSkipped []changeState, postReasons map[string]skipReason, preSkipped []skippedEntry) {
+	total := len(postSkipped) + len(preSkipped)
+	_, _ = fmt.Fprintf(w, "\nSkipped %d change(s):\n\n", total)
+	for _, s := range preSkipped {
+		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
+		_, _ = fmt.Fprintf(w, "         %s\n", s.reason.reason)
+	}
+	for _, s := range postSkipped {
+		r := postReasons[s.change.ChangeID]
 		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		_, _ = fmt.Fprintf(w, "         %s\n", r.reason)
 	}

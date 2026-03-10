@@ -63,6 +63,10 @@ type Runner interface {
 
 	// Rebase rebases the given revsets onto the destination revision.
 	Rebase(revsets []string, destination string) error
+
+	// ConfigGet returns the value of a jj configuration key.
+	// Returns an error if the key is not set.
+	ConfigGet(key string) (string, error)
 }
 
 // NewRunner creates a Runner that executes jj in the given repository directory.
@@ -208,6 +212,20 @@ func (r *realRunner) Interdiff(from, to string) (string, error) {
 	}
 	slog.Debug("jj exec ok", "bytes", len(out))
 	return string(out), nil
+}
+
+func (r *realRunner) ConfigGet(key string) (string, error) {
+	args := []string{"config", "get", "-R", r.repoDir, key}
+	logCmd("jj", args)
+	cmd := exec.Command("jj", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		slog.Debug("jj exec failed", "err", err, "stderr", strings.TrimSpace(stderr.String()))
+		return "", fmt.Errorf("jj config get %s: %w\n%s", key, err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *realRunner) Rebase(revsets []string, destination string) error {

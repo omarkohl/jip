@@ -156,6 +156,60 @@ func (dag *ChangeDAG) LeafChanges() []*Change {
 	return leaves
 }
 
+// FindPrivateChanges queries jj for the git.private-commits config and
+// returns the set of change IDs from the given DAGs that match the configured
+// private revset. Returns an empty set if git.private-commits is not configured.
+func FindPrivateChanges(runner Runner, dags []*ChangeDAG) (map[string]bool, error) {
+	privateRevset, err := runner.ConfigGet("git.private-commits")
+	if err != nil || privateRevset == "" {
+		return nil, nil // not configured → no private commits
+	}
+
+	// Build a revset of all change IDs across all DAGs.
+	var ids []string
+	for _, dag := range dags {
+		for _, c := range dag.Changes {
+			ids = append(ids, c.ChangeID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	combined := "(" + strings.Join(ids, " | ") + ") & (" + privateRevset + ")"
+	data, err := runner.Log(combined)
+	if err != nil {
+		return nil, fmt.Errorf("evaluating private commits: %w", err)
+	}
+	changes, err := ParseChanges(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private commits: %w", err)
+	}
+
+	result := make(map[string]bool, len(changes))
+	for _, c := range changes {
+		result[c.ChangeID] = true
+	}
+	return result, nil
+}
+
+// FilterDAG returns a new ChangeDAG excluding changes whose IDs are keys in skip.
+// Returns nil if all changes are skipped.
+func FilterDAG[T any](dag *ChangeDAG, skip map[string]T) *ChangeDAG {
+	var filtered []*Change
+	byID := make(map[string]*Change)
+	for _, c := range dag.Changes {
+		if _, skipped := skip[c.ChangeID]; !skipped {
+			filtered = append(filtered, c)
+			byID[c.ChangeID] = c
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return &ChangeDAG{Changes: filtered, ByID: byID}
+}
+
 // topoSort performs Kahn's algorithm on the subset of changes identified
 // by memberIndices, returning a ChangeDAG with changes ordered roots-first.
 func topoSort(all []Change, memberIndices []int, known map[string]int) (*ChangeDAG, error) {

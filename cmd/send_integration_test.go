@@ -1306,6 +1306,273 @@ func TestIntegration_SendAllowsPushAfterRebase(t *testing.T) {
 	}
 }
 
+func TestIntegration_SendSkipsEmptyDescription(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create a normal change followed by one with an empty description.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: normal change")
+
+	// Create an empty-description change: write a file, then commit with empty message.
+	writeFile(t, repoDir, "b.go", "package b")
+	jjRun(t, repoDir, "commit", "-m", "")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	// Should return an error because of skipped changes.
+	if err == nil {
+		t.Fatal("expected error from send with empty description, got nil")
+	}
+
+	// The empty description change should be reported.
+	if !strings.Contains(output, "no description") {
+		t.Errorf("expected 'no description' in output, got:\n%s", output)
+	}
+
+	// The normal change should still be sent.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected 1 PR (normal change), got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendSkipsDescendantsOfEmptyDescription(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create: normal → empty description → descendant of empty.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: normal change")
+
+	writeFile(t, repoDir, "b.go", "package b")
+	jjRun(t, repoDir, "commit", "-m", "")
+
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: descendant of empty")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	if err == nil {
+		t.Fatal("expected error from send with empty description, got nil")
+	}
+
+	// Should skip 2 changes (empty + its descendant).
+	if !strings.Contains(output, "Skipped 2 change(s)") {
+		t.Errorf("expected 'Skipped 2 change(s)' in output, got:\n%s", output)
+	}
+
+	if !strings.Contains(output, "ancestor") {
+		t.Errorf("expected 'ancestor' in output for descendant skip, got:\n%s", output)
+	}
+
+	// The normal change should still be sent.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected 1 PR (normal change), got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendSkipsPrivateCommits(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Configure git.private-commits in the test repo.
+	jjRun(t, repoDir, "config", "set", "--repo", "git.private-commits", "description(glob:'private:*')")
+
+	// Create a normal change and a private change (two independent branches).
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: normal change")
+	normalID := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "b.go", "package b", "private: local merge")
+	privateID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{normalID, privateID},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	// Should return an error because of skipped changes.
+	if err == nil {
+		t.Fatal("expected error from send with private commit, got nil")
+	}
+
+	// The private change should be reported.
+	if !strings.Contains(output, "private") {
+		t.Errorf("expected 'private' in output, got:\n%s", output)
+	}
+
+	// The normal change should still be sent.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected 1 PR (normal change), got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendSkipsDescendantsOfPrivate(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Configure git.private-commits in the test repo.
+	jjRun(t, repoDir, "config", "set", "--repo", "git.private-commits", "description(glob:'private:*')")
+
+	// Create: normal change (off main), then private → descendant of private.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: normal change")
+	normalID := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "b.go", "package b", "private: local only")
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: child of private")
+	childID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{normalID, childID},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	if err == nil {
+		t.Fatal("expected error from send with private commit, got nil")
+	}
+
+	// Should skip 2 changes (private + descendant).
+	if !strings.Contains(output, "Skipped 2 change(s)") {
+		t.Errorf("expected 'Skipped 2 change(s)' in output, got:\n%s", output)
+	}
+
+	// Normal change should still be sent.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected 1 PR (normal change), got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendNoBookmarksForSkippedChanges(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Configure git.private-commits.
+	jjRun(t, repoDir, "config", "set", "--repo", "git.private-commits", "description(glob:'private:*')")
+
+	// Create a private change and one with empty description (two branches).
+	writeAndCommit(t, repoDir, "a.go", "package a", "private: secret")
+	privateID := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", "main")
+	writeFile(t, repoDir, "b.go", "package b")
+	jjRun(t, repoDir, "commit", "-m", "")
+	emptyID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	_ = executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{privateID, emptyID},
+	}, &buf)
+
+	t.Logf("Output:\n%s", buf.String())
+
+	// Verify no jip/ bookmarks were created for skipped changes.
+	bookmarkData, err := runner.BookmarkList()
+	if err != nil {
+		t.Fatalf("listing bookmarks: %v", err)
+	}
+	bookmarks, err := jj.ParseBookmarkList(bookmarkData)
+	if err != nil {
+		t.Fatalf("parsing bookmarks: %v", err)
+	}
+	for _, b := range bookmarks {
+		if strings.HasPrefix(b.Name, "jip/") {
+			t.Errorf("unexpected jip bookmark created for skipped change: %s", b.Name)
+		}
+	}
+}
+
+func TestIntegration_SendPushFailureDoesNotAbort(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	realRunner := jj.NewRunner(repoDir)
+
+	// Create two independent changes off main.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: change A")
+	changeA := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: change B")
+	changeB := getChangeID(t, repoDir, "@-")
+
+	// Simulate change B's remote being unreachable.
+	runner := &failingPushRunner{
+		Runner:        realRunner,
+		failChangeIDs: map[string]bool{changeB[:8]: true},
+	}
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{changeA, changeB},
+	}, &buf)
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	if err == nil {
+		t.Fatal("expected error due to skipped changes, got nil")
+	}
+
+	// Change A should still get a PR despite change B's push failure.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected 1 PR for change A, got %d", len(mock.prs))
+	}
+}
+
 // findBookmarkForChange returns the bookmark name associated with a change ID.
 func findBookmarkForChange(t *testing.T, runner jj.Runner, changeID string) string {
 	t.Helper()
@@ -1346,6 +1613,25 @@ func writeFile(t *testing.T, dir, filename, content string) {
 	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0644); err != nil {
 		t.Fatalf("writing %s: %v", filename, err)
 	}
+}
+
+// failingPushRunner wraps a real Runner and simulates push failures for
+// bookmarks belonging to specific change IDs (matched by checking whether the
+// bookmark name contains the change ID prefix).
+type failingPushRunner struct {
+	jj.Runner
+	failChangeIDs map[string]bool // short or full change IDs
+}
+
+func (u *failingPushRunner) GitPush(bookmarks []string, allowNew bool, remote string) error {
+	for _, b := range bookmarks {
+		for id := range u.failChangeIDs {
+			if strings.Contains(b, id) {
+				return fmt.Errorf("jj git push: simulated push failure for bookmark %s", b)
+			}
+		}
+	}
+	return u.Runner.GitPush(bookmarks, allowNew, remote)
 }
 
 // spyRunner wraps a real Runner and records remotes passed to GitFetch/GitPush/Rebase.
