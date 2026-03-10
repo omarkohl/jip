@@ -1624,7 +1624,7 @@ type failingPushRunner struct {
 	failChangeIDs map[string]bool // short or full change IDs
 }
 
-func (u *failingPushRunner) GitPush(bookmarks []string, allowNew bool, remote string) error {
+func (u *failingPushRunner) GitPush(bookmarks []string, remote string) error {
 	for _, b := range bookmarks {
 		for id := range u.failChangeIDs {
 			if strings.Contains(b, id) {
@@ -1632,7 +1632,7 @@ func (u *failingPushRunner) GitPush(bookmarks []string, allowNew bool, remote st
 			}
 		}
 	}
-	return u.Runner.GitPush(bookmarks, allowNew, remote)
+	return u.Runner.GitPush(bookmarks, remote)
 }
 
 // spyRunner wraps a real Runner and records remotes passed to GitFetch/GitPush/Rebase.
