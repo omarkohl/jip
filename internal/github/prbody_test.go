@@ -18,8 +18,8 @@ func TestBuildStackBlock_MultiplePRs(t *testing.T) {
 	if !strings.Contains(result, "PRs:") {
 		t.Errorf("expected 'PRs:' header, got:\n%s", result)
 	}
-	if !strings.Contains(result, "* ➡️ #2") {
-		t.Errorf("expected current PR arrow marker, got:\n%s", result)
+	if !strings.Contains(result, "* ➡️ #2 (this PR, depends on the ones below ⬇️)") {
+		t.Errorf("expected current PR annotation with dependency hint, got:\n%s", result)
 	}
 	if !strings.Contains(result, "* #1\n") {
 		t.Errorf("expected #1 in stack, got:\n%s", result)
@@ -32,6 +32,20 @@ func TestBuildStackBlock_MultiplePRs(t *testing.T) {
 	idx1 := strings.Index(result, "#1")
 	if idx3 > idx1 {
 		t.Errorf("expected #3 before #1 (newest first), got:\n%s", result)
+	}
+}
+
+func TestBuildStackBlock_CurrentIsBottom(t *testing.T) {
+	result := BuildStackBlock([]int{1, 2, 3}, 1)
+	if !strings.Contains(result, "* ➡️ #1 (this PR, base of the stack — can be merged first)") {
+		t.Errorf("expected base-of-stack annotation for bottom PR, got:\n%s", result)
+	}
+}
+
+func TestBuildStackBlock_CurrentIsTop(t *testing.T) {
+	result := BuildStackBlock([]int{1, 2, 3}, 3)
+	if !strings.Contains(result, "* ➡️ #3 (this PR, depends on the ones below ⬇️)") {
+		t.Errorf("expected dependency annotation for top PR, got:\n%s", result)
 	}
 }
 

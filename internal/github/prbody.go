@@ -22,7 +22,12 @@ func BuildStackBlock(prNumbers []int, current int) string {
 	for i := len(prNumbers) - 1; i >= 0; i-- {
 		num := prNumbers[i]
 		if num == current {
-			fmt.Fprintf(&b, "* ➡️ #%d\n", num)
+			if i == 0 {
+				// Current PR is the bottom of the stack.
+				fmt.Fprintf(&b, "* ➡️ #%d (this PR, base of the stack — can be merged first)\n", num)
+			} else {
+				fmt.Fprintf(&b, "* ➡️ #%d (this PR, depends on the ones below ⬇️)\n", num)
+			}
 		} else {
 			fmt.Fprintf(&b, "* #%d\n", num)
 		}
