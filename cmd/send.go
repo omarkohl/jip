@@ -26,7 +26,7 @@ Default revset is @- (the last committed change and its ancestors up to base).`,
 
 func init() {
 	rootCmd.AddCommand(sendCmd)
-	sendCmd.Flags().StringP("base", "b", "main", "Base branch")
+	sendCmd.Flags().StringP("base", "b", "trunk()", "Base branch (defaults to the repo's trunk branch, usually main)")
 	sendCmd.Flags().String("remote", "origin", "Push remote name")
 	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (where PRs are opened)")
 	sendCmd.Flags().BoolP("dry-run", "n", false, "Show what would happen without making changes")
@@ -302,6 +302,17 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		return fmt.Errorf("parsing bookmarks: %w", err)
 	}
 
+	// Resolve base revset to a concrete remote bookmark name for GitHub.
+	// GH's PR API needs a branch name; jj ops above can use the revset directly.
+	baseRemote := opts.remote
+	if opts.upstreamRemote != "" {
+		baseRemote = opts.upstreamRemote
+	}
+	baseBranch, err := jj.ResolveBaseBranch(runner, opts.base, bookmarks, baseRemote)
+	if err != nil {
+		return err
+	}
+
 	// Build lookup: collect all remote branches, query GitHub for existing PRs.
 	bookmarkByName := make(map[string]*jj.BookmarkInfo, len(bookmarks))
 	for i := range bookmarks {
@@ -524,7 +535,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 						if err != nil {
 							_, _ = fmt.Fprintf(w, "  warning: interdiff failed for #%d: %v\n", s.pr.Number, err)
 						} else {
-							comment := gh.BuildDiffComment(diff, repoFullName, opts.base, rs.Target, s.change.CommitID)
+							comment := gh.BuildDiffComment(diff, repoFullName, baseBranch, rs.Target, s.change.CommitID)
 							if err := client.CommentOnPR(s.pr.Number, comment); err != nil {
 								return fmt.Errorf("commenting on PR #%d: %w", s.pr.Number, err)
 							}
@@ -542,7 +553,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				if opts.pushOwner != "" {
 					head = opts.pushOwner + ":" + head
 				}
-				pr, err := client.CreatePR(head, opts.base, title, s.change.Body(), opts.draft)
+				pr, err := client.CreatePR(head, baseBranch, title, s.change.Body(), opts.draft)
 				if err != nil {
 					return fmt.Errorf("creating PR for %s: %w", s.change.ChangeID, err)
 				}

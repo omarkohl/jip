@@ -23,7 +23,7 @@ Global flags:
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--base` | `-b` | `main` | Base branch |
+| `--base` | `-b` | `trunk()` | Base branch (defaults to the repo's trunk branch, usually `main`) |
 | `--remote` | | `origin` | Push remote name |
 | `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened) |
 | `--dry-run` | `-n` | | Show what would happen without making changes |
@@ -44,6 +44,21 @@ jip send              # send @- and its ancestors up to base
 jip send @--          # send only the grandparent change
 jip send @- xyz       # send changes reachable from @- or xyz
 ```
+
+## Base branch (`--base` / `-b`)
+
+The default `trunk()` picks up your repo's trunk branch automatically —
+typically `main`, but also `master` or `trunk` depending on the repo.
+
+Pass a branch name to override:
+
+```bash
+jip send -b develop         # target the "develop" branch
+jip send -b release/2026    # target a release branch
+```
+
+The base must exist as a bookmark on the push/upstream remote — it's the
+branch your PRs target on GitHub.
 
 ## Fork-based workflow
 

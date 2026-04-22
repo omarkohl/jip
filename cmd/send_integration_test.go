@@ -1574,6 +1574,75 @@ func TestIntegration_SendPushFailureDoesNotAbort(t *testing.T) {
 	}
 }
 
+func TestIntegration_SendAcceptsAlternateBaseBranch(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// Create a "develop" branch on the remote.
+	jjRun(t, repoDir, "bookmark", "set", "develop", "-r", "main")
+	jjRun(t, repoDir, "git", "push", "--bookmark", "develop")
+
+	// Stack a change on top.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: targets develop")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "develop",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(mock.prs))
+	}
+	for _, pr := range mock.prs {
+		if pr.BaseRefName != "develop" {
+			t.Errorf("PR base is %q, expected \"develop\"", pr.BaseRefName)
+		}
+	}
+}
+
+func TestIntegration_SendResolvesTrunkRevset(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: trunk default")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "trunk()",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(mock.prs))
+	}
+	for _, pr := range mock.prs {
+		if pr.BaseRefName != "main" {
+			t.Errorf("PR base is %q, expected \"main\" (resolved from trunk())", pr.BaseRefName)
+		}
+	}
+}
+
 // findBookmarkForChange returns the bookmark name associated with a change ID.
 func findBookmarkForChange(t *testing.T, runner jj.Runner, changeID string) string {
 	t.Helper()
