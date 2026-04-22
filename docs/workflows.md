@@ -314,3 +314,29 @@ Yes. If your revset resolves to a single commit, jip creates a single PR with
 no stack navigation in the description.
 
 ![A single-commit PR with no stack navigation](images/independent-pr.png)
+
+### Why does every PR target the final base branch instead of the previous PR's branch?
+
+Some stacking tools chain PR targets (PR #2 → PR #1's branch, PR #3 → PR #2's
+branch, etc.). jip points every PR at the final base branch (usually `main`).
+
+The reasons:
+
+- **Standard GitHub tooling works unchanged.** PRs can be merged or
+  rebase-merged from the UI without jip or any custom "land" command.
+- **The target branch is explicit.** Every PR clearly shows where the change
+  is ultimately going.
+- **No write access required on the upstream.** Chaining targets requires the
+  intermediate branches to exist on the repo the PR is opened against. When
+  contributing from a fork, that repo is the upstream and you usually can't
+  push branches there. This is a common limitation of similar tools.
+
+Consequences to be aware of:
+
+- **The "Files changed" tab shows the cumulative diff from `main`**, not just
+  the commit for the current PR. The PR description highlights the specific
+  commit to review. See [Reviewing stacked PRs](reviewing.md).
+- **Mergeability signals can be misleading.** GitHub computes conflict status
+  against `main`, so PRs higher in the stack may appear to conflict when the
+  difference is really just the earlier unmerged PRs. Merging bottom-up
+  resolves these automatically.
