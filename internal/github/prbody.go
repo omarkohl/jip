@@ -9,6 +9,123 @@ import (
 // file sections by default.
 const collapseThreshold = 20
 
+// pushedCommitMarkerPrefix is an invisible HTML-comment marker embedded in
+// every PR body by jip. It records the commit jip pushed so that a later
+// `send --diff-since-jip` can recover the previous jip push as the interdiff
+// base, independent of what others pushed to the branch directly.
+const pushedCommitMarkerPrefix = "<!-- jip:pushed-commit="
+
+// pushedCommitMarker renders the marker for the given commit hash.
+func pushedCommitMarker(hash string) string {
+	return pushedCommitMarkerPrefix + hash + " -->"
+}
+
+// WithPushedCommitMarker ensures the PR body contains exactly one pushed-commit
+// marker reflecting commit. If the body already has that exact commit, it is
+// returned unchanged. Otherwise any existing markers are stripped and the new
+// marker is appended.
+func WithPushedCommitMarker(body, commit string) string {
+	if commit == "" {
+		return body
+	}
+	if ParsePushedCommit(body) == commit {
+		return body
+	}
+	body = stripPushedCommitMarkers(body)
+	marker := pushedCommitMarker(commit)
+	if body == "" {
+		return marker
+	}
+	return body + "\n\n" + marker
+}
+
+// stripPushedCommitMarkers removes all pushed-commit markers (and the \n\n
+// separator that WithPushedCommitMarker prepends) from body.
+func stripPushedCommitMarkers(body string) string {
+	for {
+		idx := strings.Index(body, pushedCommitMarkerPrefix)
+		if idx == -1 {
+			break
+		}
+		rest := body[idx+len(pushedCommitMarkerPrefix):]
+		end := strings.Index(rest, "-->")
+		if end == -1 {
+			break
+		}
+		markerEnd := idx + len(pushedCommitMarkerPrefix) + end + len("-->")
+		markerStart := idx
+		if markerStart >= 2 && body[markerStart-2:markerStart] == "\n\n" {
+			markerStart -= 2
+		}
+		body = body[:markerStart] + body[markerEnd:]
+	}
+	return body
+}
+
+// ParsePushedCommit extracts the commit hash from a jip pushed-commit marker
+// in a PR body, or "" if the body has no marker or the value is not a valid
+// hex hash. Uses LastIndex so that if multiple markers exist the newest one
+// wins.
+func ParsePushedCommit(commentBody string) string {
+	idx := strings.LastIndex(commentBody, pushedCommitMarkerPrefix)
+	if idx == -1 {
+		return ""
+	}
+	rest := commentBody[idx+len(pushedCommitMarkerPrefix):]
+	end := strings.Index(rest, "-->")
+	if end == -1 {
+		return ""
+	}
+	value := strings.TrimSpace(rest[:end])
+	if len(value) < 7 {
+		return ""
+	}
+	for i := range len(value) {
+		if !isHexChar(value[i]) {
+			return ""
+		}
+	}
+	return value
+}
+
+// ParseReviewCommit extracts the commit hash from the "Only review commit"
+// link that BuildStackedPRBody writes into a stacked PR's body, or "" if the
+// body has no such link (e.g. a standalone, non-stacked PR).
+//
+// Only the line that starts with "Only review commit" is searched, and the
+// hash is extracted from the exact /pull/<number>/commits/<hash> URL shape to
+// avoid matching unrelated URLs in user-written descriptions.
+func ParseReviewCommit(prBody string) string {
+	const lineMarker = "Only review commit "
+	idx := strings.Index(prBody, lineMarker)
+	if idx == -1 {
+		return ""
+	}
+	// Restrict search to the single line that contains the marker.
+	line := prBody[idx:]
+	if nl := strings.IndexByte(line, '\n'); nl != -1 {
+		line = line[:nl]
+	}
+	const urlMarker = "/commits/"
+	ci := strings.Index(line, urlMarker)
+	if ci == -1 {
+		return ""
+	}
+	rest := line[ci+len(urlMarker):]
+	end := 0
+	for end < len(rest) && isHexChar(rest[end]) {
+		end++
+	}
+	if end < 7 {
+		return ""
+	}
+	return rest[:end]
+}
+
+func isHexChar(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
 // BuildStackBlock generates a markdown stack navigation block showing
 // the current PR's position in the stack.
 func BuildStackBlock(prNumbers []int, current int) string {
@@ -72,18 +189,24 @@ type fileDiff struct {
 }
 
 // BuildDiffComment generates a PR comment with interdiff output,
-// using collapsible sections for each file.
-func BuildDiffComment(codeDiff, repoName, baseBranch, oldCommit, newCommit string) string {
+// using collapsible sections for each file. When sinceJip is true the header
+// reads "Changes since last jip send" (the base is jip's own previous send
+// rather than the current remote head).
+func BuildDiffComment(codeDiff, repoName, baseBranch, oldCommit, newCommit string, sinceJip bool) string {
 	footer := rangeDiffFooter(repoName, baseBranch, oldCommit, newCommit)
+	header := "### Changes since last push\n"
+	if sinceJip {
+		header = "### Changes since last jip send\n"
+	}
 
 	if strings.TrimSpace(codeDiff) == "" {
-		return "### Changes since last push\n\n**No code changes** (likely just a rebase).\n" + footer
+		return header + "\n**No code changes** (likely just a rebase).\n" + footer
 	}
 
 	files := parseGitDiff(codeDiff)
 
 	var b strings.Builder
-	b.WriteString("### Changes since last push\n")
+	b.WriteString(header)
 
 	totalLines := 0
 	for _, f := range files {
@@ -103,6 +226,23 @@ func BuildDiffComment(codeDiff, repoName, baseBranch, oldCommit, newCommit strin
 	}
 
 	b.WriteString(footer)
+	return b.String()
+}
+
+// BuildUnavailableDiffComment generates a PR comment for the case where
+// --diff-since-jip knows the previous jip-pushed commit but cannot find it
+// locally (e.g. it was pushed from another machine and not fetched). It
+// documents that the diff could not be generated and points at the remote.
+func BuildUnavailableDiffComment(repoName, baseBranch, oldCommit, newCommit string) string {
+	oldShort := oldCommit[:minInt(7, len(oldCommit))]
+	var b strings.Builder
+	b.WriteString("### Changes since last jip send\n\n")
+	fmt.Fprintf(&b,
+		"⚠️ Could not generate the diff: the previously pushed commit `%s` is not "+
+			"available locally (it may have been pushed from another machine). "+
+			"Fetch the remote to inspect it.\n",
+		oldShort)
+	b.WriteString(rangeDiffFooter(repoName, baseBranch, oldCommit, newCommit))
 	return b.String()
 }
 

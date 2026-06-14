@@ -571,6 +571,162 @@ func TestIntegration_SendPostsInterdiffComment(t *testing.T) {
 	}
 }
 
+// After any send, the PR body should carry the invisible pushed-commit marker
+// recording the commit that was pushed, so a later --diff-since-jip can use it.
+func TestIntegration_SendEmbedsPushedCommitMarker(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "f.go", "package x\n\nconst V = 1\n", "feat: add f")
+	changeID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	if err := executeSend(runner, mock, sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}}, &buf); err != nil {
+		t.Fatalf("send failed: %v\n%s", err, buf.String())
+	}
+
+	commit := getCommitID(t, repoDir, changeID)
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	var pr *gh.PRInfo
+	for _, p := range mock.prs {
+		pr = p
+	}
+	if pr == nil {
+		t.Fatal("expected a PR")
+	}
+	if got := gh.ParsePushedCommit(pr.Body); got != commit {
+		t.Errorf("body marker = %q, want pushed commit %q\nbody:\n%s", got, commit, pr.Body)
+	}
+}
+
+// With --diff-since-jip, the interdiff base is the commit recorded in the PR
+// body, not the current remote head. This simulates the remote head having
+// advanced past jip's recorded push (e.g. a direct push by someone else).
+func TestIntegration_SendDiffSinceJipUsesRecordedBase(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "f.go", "package x\n\nconst V = 1\n", "feat: add f")
+	changeID := getChangeID(t, repoDir, "@-")
+
+	// Send 1: creates the PR. Record commit1.
+	var buf bytes.Buffer
+	if err := executeSend(runner, mock, sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}}, &buf); err != nil {
+		t.Fatalf("send 1 failed: %v\n%s", err, buf.String())
+	}
+	commit1 := getCommitID(t, repoDir, changeID)
+
+	var prNumber int
+	mock.mu.Lock()
+	for n := range mock.prs {
+		prNumber = n
+	}
+	mock.mu.Unlock()
+
+	// Edit to v2 and send again (default), moving the remote head to commit2.
+	editFile(t, repoDir, changeID, "f.go", "package x\n\nconst V = 2\n")
+	buf.Reset()
+	if err := executeSend(runner, mock, sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}}, &buf); err != nil {
+		t.Fatalf("send 2 failed: %v\n%s", err, buf.String())
+	}
+	commit2 := getCommitID(t, repoDir, changeID)
+
+	// Simulate desync: the PR's recorded jip push is still commit1 even though
+	// the remote head is now commit2.
+	mock.mu.Lock()
+	mock.prs[prNumber].Body = gh.WithPushedCommitMarker("feat: add f", commit1)
+	mock.comments[prNumber] = nil
+	mock.mu.Unlock()
+
+	// Edit to v3 and send with --diff-since-jip.
+	editFile(t, repoDir, changeID, "f.go", "package x\n\nconst V = 3\n")
+	buf.Reset()
+	if err := executeSend(runner, mock, sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, diffSinceJip: true}, &buf); err != nil {
+		t.Fatalf("send 3 failed: %v\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	comments := mock.comments[prNumber]
+	if len(comments) != 1 {
+		t.Fatalf("expected exactly 1 comment from send 3, got %d", len(comments))
+	}
+	comment := comments[0]
+
+	if !strings.Contains(comment, "Changes since last jip send") {
+		t.Errorf("expected jip-specific header, got:\n%s", comment)
+	}
+	// Base is commit1: the diff must show the V=1 -> V=3 transition and the
+	// footer must reference commit1, never commit2.
+	if !strings.Contains(comment, "const V = 1") {
+		t.Errorf("expected diff against commit1 (V=1), got:\n%s", comment)
+	}
+	if !strings.Contains(comment, commit1) {
+		t.Errorf("expected footer to reference base commit1 %s, got:\n%s", commit1, comment)
+	}
+	if strings.Contains(comment, commit2) {
+		t.Errorf("comment should not reference remote head commit2 %s as base:\n%s", commit2, comment)
+	}
+}
+
+// With --diff-since-jip, when the recorded jip commit is not present locally
+// (e.g. pushed from another machine and not fetched), jip documents that the
+// diff could not be generated instead of producing a misleading one.
+func TestIntegration_SendDiffSinceJipCommitNotLocal(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "f.go", "package x\n\nconst V = 1\n", "feat: add f")
+	changeID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	if err := executeSend(runner, mock, sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}}, &buf); err != nil {
+		t.Fatalf("send 1 failed: %v\n%s", err, buf.String())
+	}
+
+	var prNumber int
+	mock.mu.Lock()
+	for n := range mock.prs {
+		prNumber = n
+	}
+	// Record a commit that does not exist in the local repo.
+	missing := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	mock.prs[prNumber].Body = gh.WithPushedCommitMarker("feat: add f", missing)
+	mock.comments[prNumber] = nil
+	mock.mu.Unlock()
+
+	editFile(t, repoDir, changeID, "f.go", "package x\n\nconst V = 2\n")
+	buf.Reset()
+	if err := executeSend(runner, mock, sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, diffSinceJip: true}, &buf); err != nil {
+		t.Fatalf("send 2 failed: %v\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	comments := mock.comments[prNumber]
+	if len(comments) != 1 {
+		t.Fatalf("expected exactly 1 comment, got %d", len(comments))
+	}
+	comment := comments[0]
+	if !strings.Contains(comment, "Could not generate") {
+		t.Errorf("expected 'could not generate' note, got:\n%s", comment)
+	}
+	if !strings.Contains(comment, "deadbee") {
+		t.Errorf("expected the missing commit's short hash, got:\n%s", comment)
+	}
+}
+
 func TestIntegration_SendCrossForkPrefixesHead(t *testing.T) {
 	checkJJ(t)
 
@@ -1795,6 +1951,23 @@ func getChangeID(t *testing.T, dir, rev string) string {
 	t.Helper()
 	out := jjRun(t, dir, "log", "--no-graph", "-r", rev, "-T", "change_id")
 	return strings.TrimSpace(out)
+}
+
+func getCommitID(t *testing.T, dir, rev string) string {
+	t.Helper()
+	out := jjRun(t, dir, "log", "--no-graph", "-r", rev, "-T", "commit_id")
+	return strings.TrimSpace(out)
+}
+
+// editFile rewrites a file in an existing change and leaves the working copy on
+// a fresh child so the change resolves as @-.
+func editFile(t *testing.T, dir, changeID, filename, content string) {
+	t.Helper()
+	jjRun(t, dir, "edit", changeID)
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0644); err != nil {
+		t.Fatalf("writing %s: %v", filename, err)
+	}
+	jjRun(t, dir, "new", changeID)
 }
 
 func assertPRRefsInBody(t *testing.T, pr *gh.PRInfo, shouldRef, shouldNotRef []*gh.PRInfo) {

@@ -35,6 +35,7 @@ func init() {
 	sendCmd.Flags().BoolP("existing", "x", false, "Only update PRs that already exist (skip new ones)")
 	sendCmd.Flags().Bool("no-stack", false, "Send only the tip of each stack as a single PR")
 	sendCmd.Flags().Bool("rebase", false, "Rebase the stack onto the base branch before sending")
+	sendCmd.Flags().Bool("diff-since-jip", false, "Diff against jip's own last send (recorded in the PR) instead of the current remote head, so direct pushes by others don't distort the \"changes since\" comment")
 
 	_ = sendCmd.RegisterFlagCompletionFunc("base", completeJJBookmarks)
 }
@@ -51,6 +52,7 @@ type sendOpts struct {
 	existing       bool
 	noStack        bool
 	rebase         bool
+	diffSinceJip   bool
 	reviewers      []string
 	revsets        []string
 }
@@ -95,6 +97,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 	existing, _ := cmd.Flags().GetBool("existing")
 	noStack, _ := cmd.Flags().GetBool("no-stack")
 	rebase, _ := cmd.Flags().GetBool("rebase")
+	diffSinceJip, _ := cmd.Flags().GetBool("diff-since-jip")
 	w := cmd.OutOrStdout()
 
 	revsets := args
@@ -172,6 +175,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 		existing:       existing,
 		noStack:        noStack,
 		rebase:         rebase,
+		diffSinceJip:   diffSinceJip,
 		reviewers:      reviewers,
 		revsets:        revsets,
 	}, w)
@@ -527,19 +531,15 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 					s.changed = true
 				}
 
-				// Post interdiff comment: compare the old remote commit to the new local commit.
+				// Post "changes since" comment. By default the base is the old
+				// remote commit; with --diff-since-jip it is jip's own previous
+				// push (recorded in the PR body), so direct pushes by others
+				// don't distort the diff.
 				bi := bookmarkByName[s.bookmark.Bookmark]
 				if bi != nil {
-					if rs, ok := bi.Remotes[opts.remote]; ok && rs.Target != "" && rs.Target != s.change.CommitID {
-						diff, err := runner.Interdiff(rs.Target, s.change.CommitID)
-						if err != nil {
-							_, _ = fmt.Fprintf(w, "  warning: interdiff failed for #%d: %v\n", s.pr.Number, err)
-						} else {
-							comment := gh.BuildDiffComment(diff, repoFullName, baseBranch, rs.Target, s.change.CommitID)
-							if err := client.CommentOnPR(s.pr.Number, comment); err != nil {
-								return fmt.Errorf("commenting on PR #%d: %w", s.pr.Number, err)
-							}
-							s.changed = true
+					if rs, ok := bi.Remotes[opts.remote]; ok {
+						if err := postChangesComment(runner, client, s, rs.Target, repoFullName, baseBranch, opts.diffSinceJip, w); err != nil {
+							return err
 						}
 					}
 				}
@@ -568,26 +568,33 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 9. Update all PR bodies with stack navigation (skip when --no-stack).
+		// 9. Update all PR bodies with stack navigation (skip nav when
+		// --no-stack) plus the invisible pushed-commit marker that records this
+		// push for a later --diff-since-jip.
+		//
+		// Each PR's stack only includes its ancestors and descendants (its
+		// dependency chain), not unrelated branches in the same DAG.
+		var perChangeStack [][]int
 		if !opts.noStack {
-			// Each PR's stack only includes its ancestors and descendants (its
-			// dependency chain), not unrelated branches in the same DAG.
-			perChangeStack := computeStackPRs(activeStates)
-
-			for i, s := range activeStates {
-				body := gh.BuildStackedPRBody(
+			perChangeStack = computeStackPRs(activeStates)
+		}
+		for i, s := range activeStates {
+			body := s.change.Body()
+			if !opts.noStack {
+				body = gh.BuildStackedPRBody(
 					s.change.CommitID,
 					repoFullName,
 					s.pr.Number,
 					perChangeStack[i],
 					s.change.Body(),
 				)
-				if body != s.pr.Body {
-					if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Body: &body}); err != nil {
-						return fmt.Errorf("updating PR #%d body: %w", s.pr.Number, err)
-					}
-					activeStates[i].changed = true
+			}
+			body = gh.WithPushedCommitMarker(body, s.change.CommitID)
+			if body != s.pr.Body {
+				if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Body: &body}); err != nil {
+					return fmt.Errorf("updating PR #%d body: %w", s.pr.Number, err)
 				}
+				activeStates[i].changed = true
 			}
 		}
 
@@ -610,6 +617,64 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
 		return fmt.Errorf("%d change(s) skipped", totalSkipped)
 	}
+	return nil
+}
+
+// postChangesComment posts the "changes since" comment for an updated PR.
+//
+// The interdiff base is, in order of preference:
+//   - with --diff-since-jip: the commit jip recorded in the PR body (the
+//     pushed-commit marker, or the legacy "Only review commit" link), falling
+//     back to the remote head when the PR carries no jip record yet;
+//   - otherwise: the current remote head.
+//
+// When --diff-since-jip resolves the base from a jip record but that commit is
+// not available locally (e.g. another machine pushed it and we didn't fetch),
+// it documents that the diff could not be generated instead of computing one.
+func postChangesComment(runner jj.Runner, client gh.Service, s *changeState, remoteTarget, repoFullName, baseBranch string, sinceJip bool, w io.Writer) error {
+	newCommit := s.change.CommitID
+
+	base := remoteTarget
+	fromRecord := false
+	if sinceJip {
+		if rec := gh.ParsePushedCommit(s.pr.Body); rec != "" {
+			base, fromRecord = rec, true
+		} else if rec := gh.ParseReviewCommit(s.pr.Body); rec != "" {
+			base, fromRecord = rec, true
+		}
+	}
+
+	// Nothing to compare against, or nothing changed since the base.
+	if base == "" || base == newCommit {
+		return nil
+	}
+
+	// A base recovered from a jip record may not be present locally.
+	if fromRecord {
+		exists, err := runner.CommitExists(base)
+		if err != nil {
+			return fmt.Errorf("checking commit %s for #%d: %w", base, s.pr.Number, err)
+		}
+		if !exists {
+			comment := gh.BuildUnavailableDiffComment(repoFullName, baseBranch, base, newCommit)
+			if err := client.CommentOnPR(s.pr.Number, comment); err != nil {
+				return fmt.Errorf("commenting on PR #%d: %w", s.pr.Number, err)
+			}
+			s.changed = true
+			return nil
+		}
+	}
+
+	diff, err := runner.Interdiff(base, newCommit)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  warning: interdiff failed for #%d: %v\n", s.pr.Number, err)
+		return nil
+	}
+	comment := gh.BuildDiffComment(diff, repoFullName, baseBranch, base, newCommit, sinceJip && fromRecord)
+	if err := client.CommentOnPR(s.pr.Number, comment); err != nil {
+		return fmt.Errorf("commenting on PR #%d: %w", s.pr.Number, err)
+	}
+	s.changed = true
 	return nil
 }
 

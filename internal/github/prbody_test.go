@@ -6,6 +6,137 @@ import (
 	"testing"
 )
 
+func TestWithPushedCommitMarker_RoundTrip(t *testing.T) {
+	body := WithPushedCommitMarker("Some description", "abcdef1234567890")
+	if !strings.Contains(body, "Some description") {
+		t.Errorf("marker should not drop the original body, got:\n%s", body)
+	}
+	if got := ParsePushedCommit(body); got != "abcdef1234567890" {
+		t.Errorf("ParsePushedCommit = %q, want %q", got, "abcdef1234567890")
+	}
+}
+
+func TestWithPushedCommitMarker_EmptyBody(t *testing.T) {
+	body := WithPushedCommitMarker("", "abc1234")
+	if got := ParsePushedCommit(body); got != "abc1234" {
+		t.Errorf("ParsePushedCommit = %q, want %q", got, "abc1234")
+	}
+}
+
+func TestParsePushedCommit_InvalidHash(t *testing.T) {
+	for _, bad := range []string{
+		"not-a-hash",          // non-hex chars
+		"abc123",              // too short (< 7)
+		"../../../etc/passwd", // path traversal attempt
+	} {
+		body := pushedCommitMarkerPrefix + bad + " -->"
+		if got := ParsePushedCommit(body); got != "" {
+			t.Errorf("ParsePushedCommit(%q) = %q, want empty", bad, got)
+		}
+	}
+}
+
+func TestParsePushedCommit_MultipleMarkers_LastWins(t *testing.T) {
+	first := pushedCommitMarkerPrefix + "aaaaaaa" + " -->"
+	second := pushedCommitMarkerPrefix + "bbbbbbb" + " -->"
+	body := "some text\n" + first + "\nmore text\n" + second
+	if got := ParsePushedCommit(body); got != "bbbbbbb" {
+		t.Errorf("ParsePushedCommit with multiple markers = %q, want %q", got, "bbbbbbb")
+	}
+}
+
+func TestWithPushedCommitMarker_EmptyCommitIsNoop(t *testing.T) {
+	if got := WithPushedCommitMarker("body", ""); got != "body" {
+		t.Errorf("empty commit should leave body untouched, got %q", got)
+	}
+}
+
+func TestWithPushedCommitMarker_Idempotent(t *testing.T) {
+	body := WithPushedCommitMarker("Some description", "abcdef1234567890")
+	body2 := WithPushedCommitMarker(body, "abcdef1234567890")
+	if body2 != body {
+		t.Errorf("second call with same commit should return body unchanged\ngot:  %q\nwant: %q", body2, body)
+	}
+	if strings.Count(body2, pushedCommitMarkerPrefix) != 1 {
+		t.Errorf("expected exactly one marker, got %d", strings.Count(body2, pushedCommitMarkerPrefix))
+	}
+}
+
+func TestWithPushedCommitMarker_UpdateStripsOldMarker(t *testing.T) {
+	body := WithPushedCommitMarker("Some description", "aaaaaaa")
+	body = WithPushedCommitMarker(body, "bbbbbbb")
+	if strings.Count(body, pushedCommitMarkerPrefix) != 1 {
+		t.Errorf("expected exactly one marker after update, got %d", strings.Count(body, pushedCommitMarkerPrefix))
+	}
+	if got := ParsePushedCommit(body); got != "bbbbbbb" {
+		t.Errorf("ParsePushedCommit = %q, want %q", got, "bbbbbbb")
+	}
+	if !strings.Contains(body, "Some description") {
+		t.Errorf("body should still contain the original description, got: %q", body)
+	}
+}
+
+func TestWithPushedCommitMarker_StripsMultipleOldMarkers(t *testing.T) {
+	// Simulate a body that accumulated markers from previous (pre-fix) sends.
+	body := "desc\n\n" + pushedCommitMarkerPrefix + "aaaaaaa -->\n\n" + pushedCommitMarkerPrefix + "bbbbbbb -->"
+	body = WithPushedCommitMarker(body, "ccccccc")
+	if strings.Count(body, pushedCommitMarkerPrefix) != 1 {
+		t.Errorf("expected exactly one marker, got %d", strings.Count(body, pushedCommitMarkerPrefix))
+	}
+	if got := ParsePushedCommit(body); got != "ccccccc" {
+		t.Errorf("ParsePushedCommit = %q, want %q", got, "ccccccc")
+	}
+}
+
+func TestParsePushedCommit_NoMarker(t *testing.T) {
+	if got := ParsePushedCommit("just a plain body"); got != "" {
+		t.Errorf("expected empty string for body without marker, got %q", got)
+	}
+}
+
+func TestParseReviewCommit_FromStackedBody(t *testing.T) {
+	body := BuildStackedPRBody("abcdef1234567890", "owner/repo", 2, []int{1, 2, 3}, "desc")
+	if got := ParseReviewCommit(body); got != "abcdef1234567890" {
+		t.Errorf("ParseReviewCommit = %q, want %q", got, "abcdef1234567890")
+	}
+}
+
+func TestParseReviewCommit_StandaloneBodyHasNone(t *testing.T) {
+	body := BuildStackedPRBody("abcdef1234567890", "owner/repo", 1, []int{1}, "desc")
+	if got := ParseReviewCommit(body); got != "" {
+		t.Errorf("standalone body has no commit link, got %q", got)
+	}
+}
+
+func TestParseReviewCommit_UnrelatedCommitsURLNotMatched(t *testing.T) {
+	// A /commits/ URL in the user description must not be picked up.
+	body := BuildStackedPRBody("abcdef1234567890", "owner/repo", 2, []int{1, 2, 3},
+		"See https://github.com/other/repo/commits/deadbeefcafe123 for context")
+	if got := ParseReviewCommit(body); got != "abcdef1234567890" {
+		t.Errorf("ParseReviewCommit = %q, want stacked-PR hash %q", got, "abcdef1234567890")
+	}
+}
+
+func TestBuildDiffComment_SinceJipHeader(t *testing.T) {
+	result := BuildDiffComment("", "owner/repo", "main", "aaa111", "bbb222", true)
+	if !strings.Contains(result, "Changes since last jip send") {
+		t.Errorf("expected jip-specific header, got:\n%s", result)
+	}
+}
+
+func TestBuildUnavailableDiffComment(t *testing.T) {
+	result := BuildUnavailableDiffComment("owner/repo", "main", "aaaaaaa1111111", "bbbbbbb2222222")
+	if !strings.Contains(result, "Changes since last jip send") {
+		t.Errorf("expected jip header, got:\n%s", result)
+	}
+	if !strings.Contains(result, "not\navailable locally") && !strings.Contains(result, "not available locally") {
+		t.Errorf("expected explanation that the commit is unavailable, got:\n%s", result)
+	}
+	if !strings.Contains(result, "aaaaaaa") {
+		t.Errorf("expected the missing commit's short hash, got:\n%s", result)
+	}
+}
+
 func TestBuildStackBlock_SinglePR(t *testing.T) {
 	result := BuildStackBlock([]int{1}, 1)
 	if result != "" {
@@ -116,7 +247,7 @@ func TestBuildStackedPRBody_NoStack_EmptyBody(t *testing.T) {
 }
 
 func TestBuildDiffComment_EmptyDiff(t *testing.T) {
-	result := BuildDiffComment("", "owner/repo", "main", "aaa111", "bbb222")
+	result := BuildDiffComment("", "owner/repo", "main", "aaa111", "bbb222", false)
 	if !strings.Contains(result, "Changes since last push") {
 		t.Errorf("expected 'Changes since last push' header, got:\n%s", result)
 	}
@@ -135,7 +266,7 @@ func TestBuildDiffComment_WithDiff(t *testing.T) {
  func Bar() {}
 -// old comment
 `
-	result := BuildDiffComment(diff, "owner/repo", "main", "old1234567890ab", "new4567890abcde")
+	result := BuildDiffComment(diff, "owner/repo", "main", "old1234567890ab", "new4567890abcde", false)
 	if !strings.Contains(result, "Changes since last push") {
 		t.Error("expected 'Changes since last push' header")
 	}
@@ -176,7 +307,7 @@ func TestBuildDiffComment_LargeDiff_CollapsedByDefault(t *testing.T) {
 	}
 	diff := strings.Join(diffLines, "\n")
 
-	result := BuildDiffComment(diff, "owner/repo", "main", "old123", "new456")
+	result := BuildDiffComment(diff, "owner/repo", "main", "old123", "new456", false)
 	if strings.Contains(result, "<details open>") {
 		t.Errorf("expected collapsed details for large diff, got:\n%s", result)
 	}
@@ -186,7 +317,7 @@ func TestBuildDiffComment_LargeDiff_CollapsedByDefault(t *testing.T) {
 }
 
 func TestBuildDiffComment_EmptyDiff_WithFooter(t *testing.T) {
-	result := BuildDiffComment("", "owner/repo", "main", "aaa111222333", "bbb444555666")
+	result := BuildDiffComment("", "owner/repo", "main", "aaa111222333", "bbb444555666", false)
 	if !strings.Contains(result, "View the diff on") {
 		t.Errorf("expected compare link even for empty diff, got:\n%s", result)
 	}
@@ -252,7 +383,7 @@ func TestBuildDiffComment_DiffContainingCodeFences(t *testing.T) {
 +
  ## Configuration
 `
-	result := BuildDiffComment(diff, "owner/repo", "main", "abc1234567890", "def4567890abc")
+	result := BuildDiffComment(diff, "owner/repo", "main", "abc1234567890", "def4567890abc", false)
 
 	// The output must contain the footer (which comes after the diff block).
 	// If triple backticks in the diff prematurely close the fence, the footer
