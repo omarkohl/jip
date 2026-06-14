@@ -32,6 +32,7 @@ Global flags:
 | `--existing` | `-x` | | Only update PRs that already exist (skip new ones) |
 | `--no-stack` | | | Send only the tip of each stack as a single PR |
 | `--rebase` | | | Rebase the stack onto the base branch before sending |
+| `--diff-since-jip` | | | Diff against jip's own last send (recorded in the PR) instead of the current remote head |
 
 ## Revsets
 
@@ -97,6 +98,33 @@ elsewhere (e.g. merging `main` into the `release` branch).
 ```bash
 jip send --no-stack
 ```
+
+## Diffing against jip's last send (`--diff-since-jip`)
+
+When you update a PR, jip posts a "Changes since last push" comment showing what
+changed. By default the comparison is made against the current remote head. If
+someone pushes to the branch directly (without jip), that remote head moves and
+the comparison no longer reflects what reviewers last saw through jip, producing
+an incomplete diff.
+
+`--diff-since-jip` instead compares against the commit jip itself last sent.
+jip records that commit in an invisible marker in the PR body on every send, so
+the base is recovered automatically — the comment header reads "Changes since
+last jip send":
+
+```bash
+jip send --diff-since-jip
+```
+
+If the recorded commit isn't available locally (for example it was pushed from
+another machine and you haven't fetched it), jip can't compute the diff and
+instead posts a note saying so rather than a misleading one. jip writes the
+marker on every send (including `--no-stack` sends), and because each PR carries
+its own marker, this works across an entire stack. A PR only lacks a marker if
+jip has never sent it — for instance a PR created outside jip, or one last sent
+by a jip version predating this feature. In that case jip falls back to
+comparing against the remote head and the comment header reads "Changes since
+last push", not "Changes since last jip send".
 
 ## Authentication
 

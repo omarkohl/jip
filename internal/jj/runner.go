@@ -61,6 +61,10 @@ type Runner interface {
 	// Interdiff returns the diff between two revisions using jj interdiff --git.
 	Interdiff(from, to string) (string, error)
 
+	// CommitExists reports whether the given commit/revision is present in the
+	// local repository.
+	CommitExists(rev string) (bool, error)
+
 	// Rebase rebases the given revsets onto the destination revision.
 	Rebase(revsets []string, destination string) error
 
@@ -209,6 +213,40 @@ func (r *realRunner) Interdiff(from, to string) (string, error) {
 	}
 	slog.Debug("jj exec ok", "bytes", len(out))
 	return string(out), nil
+}
+
+func (r *realRunner) CommitExists(rev string) (bool, error) {
+	// Resolve the revision to a single commit. A well-formed hash that isn't in
+	// the repo makes jj exit non-zero with "doesn't exist" / "No commit".
+	args := []string{
+		"log", "--no-graph", "--quiet",
+		"-R", r.repoDir,
+		"-r", rev,
+		"-T", `commit_id ++ "\n"`,
+	}
+	logCmd("jj", args)
+	cmd := exec.Command("jj", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if isCommitNotFoundError(stderrStr) {
+			slog.Debug("CommitExists: not present locally", "rev", rev, "stderr", stderrStr)
+			return false, nil
+		}
+		slog.Debug("CommitExists: jj failed", "rev", rev, "stderr", stderrStr)
+		return false, fmt.Errorf("jj log %s: %w\n%s", rev, err, stderrStr)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+// isCommitNotFoundError reports whether stderr text from a failed jj log
+// command indicates the revision simply isn't present in the repo (as opposed
+// to an operational failure like a corrupt repo or jj binary issue).
+func isCommitNotFoundError(stderr string) bool {
+	return strings.Contains(stderr, "doesn't exist") ||
+		strings.Contains(stderr, "No commit")
 }
 
 func (r *realRunner) ConfigGet(key string) (string, error) {

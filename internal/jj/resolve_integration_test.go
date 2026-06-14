@@ -329,3 +329,51 @@ func writeAndCommit(t *testing.T, dir, filename, content, message string) {
 	}
 	jjRun(t, dir, "commit", "-m", message)
 }
+
+func getCommitID(t *testing.T, dir, rev string) string {
+	t.Helper()
+	out := jjRun(t, dir, "log", "--no-graph", "-r", rev, "-T", `commit_id ++ "\n"`)
+	return strings.TrimSpace(out)
+}
+
+func TestIntegration_CommitExists_Present(t *testing.T) {
+	dir := initJJRepo(t)
+	runner := NewRunner(dir)
+
+	writeAndCommit(t, dir, "a.txt", "aaa", "a change")
+	commitID := getCommitID(t, dir, "@-")
+
+	exists, err := runner.CommitExists(commitID)
+	if err != nil {
+		t.Fatalf("CommitExists(%q): unexpected error: %v", commitID, err)
+	}
+	if !exists {
+		t.Errorf("CommitExists(%q) = false, want true", commitID)
+	}
+}
+
+func TestIntegration_CommitExists_Absent(t *testing.T) {
+	dir := initJJRepo(t)
+	runner := NewRunner(dir)
+
+	// A well-formed 64-char hex hash that is guaranteed not to be in the repo.
+	absent := strings.Repeat("0", 64)
+
+	exists, err := runner.CommitExists(absent)
+	if err != nil {
+		t.Fatalf("CommitExists on absent hash: unexpected error: %v", err)
+	}
+	if exists {
+		t.Errorf("CommitExists(%q) = true, want false", absent)
+	}
+}
+
+func TestIntegration_CommitExists_BadRepo(t *testing.T) {
+	checkJJ(t)
+	runner := NewRunner("/nonexistent/path/that/cannot/be/a/repo")
+
+	_, err := runner.CommitExists("abcdef1234567")
+	if err == nil {
+		t.Error("CommitExists with bad repo dir: expected error, got nil")
+	}
+}
