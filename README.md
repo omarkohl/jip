@@ -16,6 +16,9 @@ request. When you update a PR, jip posts a comment showing what you changed
   all that in one command.
 - **Diff comments on update** — when you update a PR, jip posts a diff
   showing only what you changed (rebase noise is filtered out)
+- **No local state** — all information lives in the PR itself on GitHub;
+  reviewers and contributors don't need jip, and teams can freely mix jip and
+  non-jip users
 - **Automatic bookmarks** — no need to manually create jj bookmarks
 - **Supports forks** — works both for repositories where you have write access as well as forked ones
 - **Normal GitHub merge** — no special "land" command, just merge PRs as usual
