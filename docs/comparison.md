@@ -1,5 +1,10 @@
 # Comparison with other tools
 
+**Key differentiator:** jip does not require write access to the target
+repository — it works equally well for contributors submitting PRs from a fork.
+Every other tool listed here requires write access, which makes them unsuitable
+for open-source contribution workflows where you don't own the repo.
+
 ## vs [jj-spr](https://github.com/LucioFranco/jj-spr)
 
 jj-spr is the most feature-rich existing tool. Key differences:
@@ -24,6 +29,7 @@ interdiff problem through PR comments instead.
 | Bookmark management | Automatic | Requires manual bookmark creation |
 | Reviewer interdiff | Yes (PR comments) | No |
 | Commits per PR | One (enforced) | Flexible |
+| Write access to target repo | Not required | Required |
 
 ## vs [jj-ryu](https://github.com/dmmulroy/jj-ryu)
 
@@ -36,6 +42,7 @@ differences:
 | Reviewer interdiff | Yes (PR comments) | No |
 | Maturity | Early | Alpha |
 | Commits per PR | One (enforced) | Flexible |
+| Write access to target repo | Not required | Required |
 
 ## vs [fj](https://github.com/lazywei/fj)
 
@@ -45,7 +52,7 @@ fj is a minimal Go tool with a similar philosophy (one commit per PR).
 |---|---|---|
 | Reviewer interdiff | Yes (PR comments) | No |
 | Bookmark management | Automatic | Manual |
-| Fork workflow | Supported | Not documented |
+| Write access to target repo | Not required | Not documented |
 
 ## vs Git-based tools (ghstack, spr, Graphite)
 
