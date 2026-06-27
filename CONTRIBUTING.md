@@ -12,6 +12,13 @@ make test         # unit tests
 make test-integration  # integration tests (require jj)
 ```
 
+Install a local dev version onto your `PATH` (`$(go env GOPATH)/bin`, usually
+`~/go/bin`):
+
+```bash
+go install .
+```
+
 Build with a specific version (for releases):
 
 ```bash
