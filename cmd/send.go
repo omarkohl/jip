@@ -432,6 +432,10 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	}
 
 	var activeStates, skippedStates []changeState
+	// upToDateCount tracks changes moved to the Skipped section with reason
+	// up-to-date. They are reported as skipped but, unlike real skips, do not
+	// cause a non-zero exit — nothing failed, there was just nothing to do.
+	var upToDateCount int
 	for _, s := range allStates {
 		if _, ok := skippedIDs[s.change.ChangeID]; ok {
 			skippedStates = append(skippedStates, s)
@@ -591,24 +595,41 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 10. Print summary.
-		_, _ = fmt.Fprintf(w, "\n%d PR(s) sent:\n\n", len(activeStates))
+		// 10. Print summary. PRs that ended up unchanged (branch already up to
+		// date and body already correct) move to the Skipped section with reason
+		// up-to-date — nothing was actually done for them, so reporting them as
+		// "sent" would be noise.
+		var sentStates []changeState
 		for _, s := range activeStates {
-			action := "updated"
-			if s.isNew {
-				action = "created"
-			} else if !s.changed {
-				action = "up-to-date"
+			if s.isNew || s.changed {
+				sentStates = append(sentStates, s)
+			} else {
+				skippedIDs[s.change.ChangeID] = skipReason{reason: "up-to-date"}
+				skippedStates = append(skippedStates, s)
+				upToDateCount++
 			}
-			_, _ = fmt.Fprintf(w, "  #%-4d %s  %s\n", s.pr.Number, action, s.pr.URL)
-			_, _ = fmt.Fprintf(w, "         %.12s  %s\n", s.change.ChangeID, s.change.Title())
+		}
+
+		if len(sentStates) > 0 {
+			_, _ = fmt.Fprintf(w, "\n%d PR(s) sent:\n\n", len(sentStates))
+			for _, s := range sentStates {
+				action := "updated"
+				if s.isNew {
+					action = "created"
+				}
+				_, _ = fmt.Fprintf(w, "  #%-4d %s  %s\n", s.pr.Number, action, s.pr.URL)
+				_, _ = fmt.Fprintf(w, "         %.12s  %s\n", s.change.ChangeID, s.change.Title())
+			}
 		}
 	}
 
 	totalSkipped := len(skippedStates) + len(preSkippedChanges)
 	if totalSkipped > 0 {
 		printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
-		return fmt.Errorf("%d change(s) skipped", totalSkipped)
+	}
+	// Only real skips (not up-to-date) constitute a failure.
+	if realSkipped := totalSkipped - upToDateCount; realSkipped > 0 {
+		return fmt.Errorf("%d change(s) skipped", realSkipped)
 	}
 	return nil
 }
