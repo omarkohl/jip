@@ -7,7 +7,7 @@ Run `make` to see available targets:
 ```bash
 make              # list targets
 make build        # build the binary
-make check        # run all checks (lint + tests)
+make precommit    # run all checks (lint + tests)
 make test         # unit tests
 make test-integration  # integration tests (require jj)
 ```

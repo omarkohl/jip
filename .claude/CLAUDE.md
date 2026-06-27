@@ -31,7 +31,7 @@ CLI tool for stacked PRs with jj (Jujutsu) and GitHub.
 
 ## Pre-commit checks
 
-Before committing, run `make check` and fix any issues. Use `make fmt` to
+Before committing, run `make precommit` and fix any issues. Use `make fmt` to
 auto-format code.
 
 ## Code style

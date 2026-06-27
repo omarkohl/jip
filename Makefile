@@ -1,4 +1,4 @@
-.PHONY: help build test test-integration lint fmt check clean
+.PHONY: help build test test-integration lint fmt precommit clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -20,7 +20,7 @@ lint: ## Run vet, format check, and linter
 fmt: ## Format code
 	gofmt -w .
 
-check: lint test test-integration ## Run all checks
+precommit: lint test test-integration ## Run all checks
 
 clean: ## Remove built binary
 	rm -f jip
