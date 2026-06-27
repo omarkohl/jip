@@ -344,8 +344,17 @@ func TestIntegration_SendUpdatesExistingPRs(t *testing.T) {
 		t.Errorf("expected still 1 PR after second send, got %d", len(mock.prs))
 	}
 
-	if !strings.Contains(buf.String(), "up-to-date") {
+	// An unchanged PR is reported as skipped (up-to-date), not as sent, and
+	// does not cause a non-zero exit.
+	out := buf.String()
+	if !strings.Contains(out, "up-to-date") {
 		t.Error("expected 'up-to-date' in second send output")
+	}
+	if !strings.Contains(out, "Skipped 1 change(s)") {
+		t.Errorf("expected up-to-date PR in Skipped section, got:\n%s", out)
+	}
+	if strings.Contains(out, "PR(s) sent") {
+		t.Errorf("expected no 'PR(s) sent' section when only up-to-date, got:\n%s", out)
 	}
 }
 
