@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -242,7 +243,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	}
 	for id := range privateIDs {
 		preSkipIDs[id] = skipReason{
-			reason: "change is private (matches git.private-commits)",
+			reason: "private (matches git.private-commits)",
 		}
 	}
 
@@ -292,7 +293,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		dags = filteredDAGs
 		if len(dags) == 0 && !opts.dryRun {
 			printPreSkippedChanges(w, preSkippedChanges)
-			return fmt.Errorf("%d change(s) skipped — nothing to send", len(preSkippedChanges))
+			return errors.New("changes skipped — nothing to send")
 		}
 	}
 
@@ -466,7 +467,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
 		}
 		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
-			return fmt.Errorf("%d change(s) skipped", len(skippedStates)+len(preSkippedChanges))
+			return errors.New("changes skipped")
 		}
 		return nil
 	}
@@ -636,7 +637,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	}
 	// Only real skips (not up-to-date) constitute a failure.
 	if realSkipped := totalSkipped - upToDateCount; realSkipped > 0 {
-		return fmt.Errorf("%d change(s) skipped", realSkipped)
+		return errors.New("changes skipped")
 	}
 	return nil
 }
