@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,6 +76,10 @@ type changeState struct {
 type skipReason struct {
 	reason   string
 	ancestor string // non-empty when skipped because an ancestor was skipped
+	// benign marks skips that are expected rather than failures (private
+	// commits, up-to-date PRs). Benign skips are reported but do not cause a
+	// non-zero exit. Cascades inherit benign-ness from their ancestor.
+	benign bool
 }
 
 func runSend(cmd *cobra.Command, args []string) error {
@@ -244,6 +247,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	for id := range privateIDs {
 		preSkipIDs[id] = skipReason{
 			reason: "private (matches git.private-commits)",
+			benign: true,
 		}
 	}
 
@@ -255,10 +259,11 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				continue
 			}
 			for _, pid := range c.ParentIDs {
-				if _, ok := preSkipIDs[pid]; ok {
+				if pr, ok := preSkipIDs[pid]; ok {
 					preSkipIDs[c.ChangeID] = skipReason{
 						reason:   "skipped because ancestor was skipped",
 						ancestor: pid,
+						benign:   pr.benign,
 					}
 					break
 				}
@@ -293,7 +298,11 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		dags = filteredDAGs
 		if len(dags) == 0 && !opts.dryRun {
 			printPreSkippedChanges(w, preSkippedChanges)
-			return errors.New("changes skipped — nothing to send")
+			if n := nonBenignSkips(nil, nil, preSkippedChanges); n > 0 {
+				return fmt.Errorf("%d change(s) skipped — nothing to send", n)
+			}
+			_, _ = fmt.Fprintf(w, "\nNothing to send.\n")
+			return nil
 		}
 	}
 
@@ -410,10 +419,11 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	for _, s := range allStates {
 		// Check if any parent was skipped.
 		for _, pid := range s.change.ParentIDs {
-			if _, ok := skippedIDs[pid]; ok {
+			if pr, ok := skippedIDs[pid]; ok {
 				skippedIDs[s.change.ChangeID] = skipReason{
 					reason:   "skipped because ancestor was skipped",
 					ancestor: pid,
+					benign:   pr.benign,
 				}
 				break
 			}
@@ -437,10 +447,6 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	}
 
 	var activeStates, skippedStates []changeState
-	// upToDateCount tracks changes moved to the Skipped section with reason
-	// up-to-date. They are reported as skipped but, unlike real skips, do not
-	// cause a non-zero exit — nothing failed, there was just nothing to do.
-	var upToDateCount int
 	for _, s := range allStates {
 		if _, ok := skippedIDs[s.change.ChangeID]; ok {
 			skippedStates = append(skippedStates, s)
@@ -466,8 +472,8 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
 			printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
 		}
-		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
-			return errors.New("changes skipped")
+		if n := nonBenignSkips(skippedStates, skippedIDs, preSkippedChanges); n > 0 {
+			return fmt.Errorf("%d change(s) skipped", n)
 		}
 		return nil
 	}
@@ -612,9 +618,8 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			if s.isNew || s.changed {
 				sentStates = append(sentStates, s)
 			} else {
-				skippedIDs[s.change.ChangeID] = skipReason{reason: "up-to-date"}
+				skippedIDs[s.change.ChangeID] = skipReason{reason: "up-to-date", benign: true}
 				skippedStates = append(skippedStates, s)
-				upToDateCount++
 			}
 		}
 
@@ -631,13 +636,13 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 	}
 
-	totalSkipped := len(skippedStates) + len(preSkippedChanges)
-	if totalSkipped > 0 {
+	if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
 		printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
 	}
-	// Only real skips (not up-to-date) constitute a failure.
-	if realSkipped := totalSkipped - upToDateCount; realSkipped > 0 {
-		return errors.New("changes skipped")
+	// Only non-benign skips (conflicts, divergence, missing description, …)
+	// constitute a failure. Private commits and up-to-date PRs are expected.
+	if n := nonBenignSkips(skippedStates, skippedIDs, preSkippedChanges); n > 0 {
+		return fmt.Errorf("%d change(s) skipped", n)
 	}
 	return nil
 }
@@ -780,6 +785,23 @@ func printPreSkippedChanges(w io.Writer, skipped []skippedEntry) {
 		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		_, _ = fmt.Fprintf(w, "         %s\n", s.reason.reason)
 	}
+}
+
+// nonBenignSkips counts skipped changes that represent genuine failures, i.e.
+// anything other than private commits / up-to-date PRs (and their cascades).
+func nonBenignSkips(postSkipped []changeState, postReasons map[string]skipReason, preSkipped []skippedEntry) int {
+	n := 0
+	for _, s := range preSkipped {
+		if !s.reason.benign {
+			n++
+		}
+	}
+	for _, s := range postSkipped {
+		if !postReasons[s.change.ChangeID].benign {
+			n++
+		}
+	}
+	return n
 }
 
 // printAllSkipped reports all skipped changes (both pre-skip and post-bookmark-creation).

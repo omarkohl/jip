@@ -1588,9 +1588,9 @@ func TestIntegration_SendSkipsPrivateCommits(t *testing.T) {
 	output := buf.String()
 	t.Logf("Output:\n%s", output)
 
-	// Should return an error because of skipped changes.
-	if err == nil {
-		t.Fatal("expected error from send with private commit, got nil")
+	// Skipping a private commit is expected, not a failure.
+	if err != nil {
+		t.Fatalf("expected no error skipping private commit, got: %v", err)
 	}
 
 	// The private change should be reported.
@@ -1635,8 +1635,9 @@ func TestIntegration_SendSkipsDescendantsOfPrivate(t *testing.T) {
 	output := buf.String()
 	t.Logf("Output:\n%s", output)
 
-	if err == nil {
-		t.Fatal("expected error from send with private commit, got nil")
+	// Skipping a private commit (and its cascade) is expected, not a failure.
+	if err != nil {
+		t.Fatalf("expected no error skipping private commit, got: %v", err)
 	}
 
 	// Should skip 2 changes (private + descendant).
