@@ -78,6 +78,27 @@ func NewRunner(repoDir string) Runner {
 	return &realRunner{repoDir: repoDir}
 }
 
+// WorkspaceRoot returns the root directory of the jj workspace containing
+// dir, or "" if dir is not inside a jj workspace. It runs `jj root` with dir
+// as the working directory because -R does not search parent directories.
+func WorkspaceRoot(dir string) (string, error) {
+	args := []string{"root"}
+	logCmd("jj", args)
+	cmd := exec.Command("jj", args...)
+	cmd.Dir = dir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if strings.Contains(stderrStr, "no jj repo") {
+			return "", nil
+		}
+		return "", fmt.Errorf("jj root: %w\n%s", err, stderrStr)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 type realRunner struct {
 	repoDir string
 }
