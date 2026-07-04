@@ -1898,6 +1898,55 @@ func (s *spyRunner) Rebase(revsets []string, destination string) error {
 	return s.Runner.Rebase(revsets, destination)
 }
 
+func TestIntegration_WorkspaceRunnerFromSubdirectory(t *testing.T) {
+	checkJJ(t)
+
+	repoDir, _ := initTestRepoWithRemote(t)
+	sub := filepath.Join(repoDir, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+
+	runner, root, err := workspaceRunner()
+	if err != nil {
+		t.Fatalf("workspaceRunner from subdirectory: %v", err)
+	}
+
+	// jj canonicalizes the root path, so compare with symlinks resolved.
+	wantRoot, err := filepath.EvalSymlinks(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRoot != wantRoot {
+		t.Errorf("root = %q, want %q", root, repoDir)
+	}
+
+	// The runner must work from the subdirectory: jj -R does not search
+	// parent directories, so a runner anchored at the cwd would fail here.
+	if _, err := runner.BookmarkList(); err != nil {
+		t.Errorf("runner from subdirectory: %v", err)
+	}
+}
+
+func TestIntegration_WorkspaceRunnerOutsideRepo(t *testing.T) {
+	checkJJ(t)
+
+	t.Chdir(t.TempDir())
+
+	_, _, err := workspaceRunner()
+	if err == nil {
+		t.Fatal("expected error outside a jj repository")
+	}
+	if !strings.Contains(err.Error(), "not in a jj repository") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 // --- Test helpers ---
 
 func checkJJ(t *testing.T) {

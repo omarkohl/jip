@@ -117,11 +117,10 @@ func runSend(cmd *cobra.Command, args []string) error {
 	_, _ = fmt.Fprintf(w, "Auth: %s\n", source)
 
 	// 2. Detect repo from remote.
-	cwd, err := os.Getwd()
+	runner, _, err := workspaceRunner()
 	if err != nil {
-		return fmt.Errorf("getting cwd: %w", err)
+		return err
 	}
-	runner := jj.NewRunner(cwd)
 
 	remoteData, err := runner.GitRemoteList()
 	if err != nil {
@@ -183,6 +182,26 @@ func runSend(cmd *cobra.Command, args []string) error {
 		reviewers:      reviewers,
 		revsets:        revsets,
 	}, w)
+}
+
+// workspaceRunner locates the jj workspace containing the current working
+// directory and returns a Runner anchored at its root, plus the root path.
+// jj's -R flag does not search parent directories, so anchoring the runner at
+// the workspace root (rather than the cwd) is what lets jip run from a
+// subdirectory of the repository.
+func workspaceRunner() (jj.Runner, string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, "", fmt.Errorf("getting cwd: %w", err)
+	}
+	root, err := jj.WorkspaceRoot(cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	if root == "" {
+		return nil, "", fmt.Errorf("%s is not in a jj repository", cwd)
+	}
+	return jj.NewRunner(root), root, nil
 }
 
 // executeSend runs the core send algorithm: resolve stacks, ensure bookmarks,
