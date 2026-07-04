@@ -33,6 +33,7 @@ Global flags:
 | `--no-stack` | | | Send only the tip of each stack as a single PR |
 | `--rebase` | | | Rebase the stack onto the base branch before sending |
 | `--diff-since-jip` | | | Diff against jip's own last send (recorded in the PR) instead of the current remote head |
+| `--no-change-comment` | | `default` | Comment posted when an updated PR has no code changes: `default`, `short`, or `none` |
 
 ## Configuration files
 
@@ -47,8 +48,8 @@ on every invocation. jip reads two TOML files:
 Repo values override global values; CLI flags override both.
 
 Keys mirror the `send` flag names: `base`, `remote`, `upstream`, `draft`,
-`no-stack`, `rebase`, `diff-since-jip`, `reviewer`. Per-invocation flags
-(`--dry-run`, `--existing`) cannot be set from config.
+`no-stack`, `rebase`, `diff-since-jip`, `reviewer`, `no-change-comment`.
+Per-invocation flags (`--dry-run`, `--existing`) cannot be set from config.
 
 ```toml
 # ~/.config/jip/config.toml — personal preferences
@@ -154,6 +155,24 @@ jip has never sent it — for instance a PR created outside jip, or one last sen
 by a jip version predating this feature. In that case jip falls back to
 comparing against the remote head and the comment header reads "Changes since
 last push", not "Changes since last jip send".
+
+## No-change comments (`--no-change-comment`)
+
+When an updated PR contains no code changes (e.g. it was only rebased), jip
+posts a comment noting that. That signal distinguishes a jip send from a
+direct force-push made outside jip, but repeat occurrences add noise for
+reviewers. `--no-change-comment` controls the behavior:
+
+- `default` — the usual formatted comment ("No code changes …")
+- `short` — a single plain-text line: `No changes since last push.`
+- `none` — no comment at all
+
+```bash
+jip send --no-change-comment=short
+```
+
+Like other workflow preferences, this can be set persistently in a
+[config file](#configuration-files).
 
 ## Authentication
 

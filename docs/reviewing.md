@@ -68,6 +68,10 @@ If a PR was only rebased without any actual content changes, jip notes that:
 
 ![Comment indicating the PR was only rebased with no content changes](images/rebase-only-comment.png)
 
+If these comments are too noisy for your team, the `--no-change-comment`
+option can shorten or suppress them (see the
+[command reference](reference.md#no-change-comments---no-change-comment)).
+
 ## Merging
 
 PRs created by jip are **normal GitHub PRs**. There is no special "land"

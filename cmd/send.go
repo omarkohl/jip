@@ -40,21 +40,25 @@ func init() {
 	sendCmd.Flags().Bool("no-stack", false, "Send only the tip of each stack as a single PR")
 	sendCmd.Flags().Bool("rebase", false, "Rebase the stack onto the base branch before sending")
 	sendCmd.Flags().Bool("diff-since-jip", false, "Diff against jip's own last send (recorded in the PR) instead of the current remote head, so direct pushes by others don't distort the \"changes since\" comment")
+	sendCmd.Flags().String("no-change-comment", "default", "Comment posted when an updated PR has no code changes: default (formatted comment), short (one plain line), or none")
 
 	_ = sendCmd.RegisterFlagCompletionFunc("base", completeJJBookmarks)
+	_ = sendCmd.RegisterFlagCompletionFunc("no-change-comment",
+		cobra.FixedCompletions([]string{"default", "short", "none"}, cobra.ShellCompDirectiveNoFileComp))
 }
 
 // sendConfigKeys lists the send flags that may be set from config files.
 // Per-invocation flags (--dry-run, --existing) are deliberately excluded.
 var sendConfigKeys = map[string]bool{
-	"base":           true,
-	"remote":         true,
-	"upstream":       true,
-	"draft":          true,
-	"no-stack":       true,
-	"rebase":         true,
-	"diff-since-jip": true,
-	"reviewer":       true,
+	"base":              true,
+	"remote":            true,
+	"upstream":          true,
+	"draft":             true,
+	"no-stack":          true,
+	"rebase":            true,
+	"diff-since-jip":    true,
+	"reviewer":          true,
+	"no-change-comment": true,
 }
 
 // applySendConfig sets flag values from config files for flags that were not
@@ -78,19 +82,20 @@ func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
 
 // sendOpts holds configuration for the send pipeline.
 type sendOpts struct {
-	base           string
-	remote         string
-	upstream       string // upstream remote URL (where PRs are opened); empty = same as remote
-	upstreamRemote string // upstream as a named remote (for fetching); empty when upstream is a URL
-	pushOwner      string // owner parsed from push remote (for cross-fork head prefix)
-	dryRun         bool
-	draft          bool
-	existing       bool
-	noStack        bool
-	rebase         bool
-	diffSinceJip   bool
-	reviewers      []string
-	revsets        []string
+	base            string
+	remote          string
+	upstream        string // upstream remote URL (where PRs are opened); empty = same as remote
+	upstreamRemote  string // upstream as a named remote (for fetching); empty when upstream is a URL
+	pushOwner       string // owner parsed from push remote (for cross-fork head prefix)
+	dryRun          bool
+	draft           bool
+	existing        bool
+	noStack         bool
+	rebase          bool
+	diffSinceJip    bool
+	noChangeComment string // "default" (or ""), "short", or "none"
+	reviewers       []string
+	revsets         []string
 }
 
 // skippedEntry records a change that was pre-skipped (before bookmark creation).
@@ -152,6 +157,12 @@ func runSend(cmd *cobra.Command, args []string) error {
 	noStack, _ := cmd.Flags().GetBool("no-stack")
 	rebase, _ := cmd.Flags().GetBool("rebase")
 	diffSinceJip, _ := cmd.Flags().GetBool("diff-since-jip")
+	noChangeComment, _ := cmd.Flags().GetString("no-change-comment")
+	switch noChangeComment {
+	case "default", "short", "none":
+	default:
+		return fmt.Errorf("invalid --no-change-comment value %q (valid: default, short, none)", noChangeComment)
+	}
 	w := cmd.OutOrStdout()
 
 	revsets := args
@@ -213,19 +224,20 @@ func runSend(cmd *cobra.Command, args []string) error {
 	}
 
 	return executeSend(runner, client, sendOpts{
-		base:           base,
-		remote:         remote,
-		upstream:       upstream,
-		upstreamRemote: upstreamRemoteName,
-		pushOwner:      pushOwner,
-		dryRun:         dryRun,
-		draft:          draft,
-		existing:       existing,
-		noStack:        noStack,
-		rebase:         rebase,
-		diffSinceJip:   diffSinceJip,
-		reviewers:      reviewers,
-		revsets:        revsets,
+		base:            base,
+		remote:          remote,
+		upstream:        upstream,
+		upstreamRemote:  upstreamRemoteName,
+		pushOwner:       pushOwner,
+		dryRun:          dryRun,
+		draft:           draft,
+		existing:        existing,
+		noStack:         noStack,
+		rebase:          rebase,
+		diffSinceJip:    diffSinceJip,
+		noChangeComment: noChangeComment,
+		reviewers:       reviewers,
+		revsets:         revsets,
 	}, w)
 }
 
@@ -613,7 +625,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				bi := bookmarkByName[s.bookmark.Bookmark]
 				if bi != nil {
 					if rs, ok := bi.Remotes[opts.remote]; ok {
-						if err := postChangesComment(runner, client, s, rs.Target, repoFullName, baseBranch, opts.diffSinceJip, w); err != nil {
+						if err := postChangesComment(runner, client, s, rs.Target, repoFullName, baseBranch, opts, w); err != nil {
 							return err
 						}
 					}
@@ -722,8 +734,13 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 // When --diff-since-jip resolves the base from a jip record but that commit is
 // not available locally (e.g. another machine pushed it and we didn't fetch),
 // it documents that the diff could not be generated instead of computing one.
-func postChangesComment(runner jj.Runner, client gh.Service, s *changeState, remoteTarget, repoFullName, baseBranch string, sinceJip bool, w io.Writer) error {
+//
+// When the interdiff is empty (e.g. a rebase-only push), opts.noChangeComment
+// controls the comment: "default" posts the formatted no-change comment,
+// "short" a single plain-text line, "none" nothing at all.
+func postChangesComment(runner jj.Runner, client gh.Service, s *changeState, remoteTarget, repoFullName, baseBranch string, opts sendOpts, w io.Writer) error {
 	newCommit := s.change.CommitID
+	sinceJip := opts.diffSinceJip
 
 	base := remoteTarget
 	fromRecord := false
@@ -760,6 +777,22 @@ func postChangesComment(runner jj.Runner, client gh.Service, s *changeState, rem
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "  warning: interdiff failed for #%d: %v\n", s.pr.Number, err)
 		return nil
+	}
+	if strings.TrimSpace(diff) == "" {
+		switch opts.noChangeComment {
+		case "none":
+			return nil
+		case "short":
+			msg := "No changes since last push."
+			if sinceJip && fromRecord {
+				msg = "No changes since last jip send."
+			}
+			if err := client.CommentOnPR(s.pr.Number, msg); err != nil {
+				return fmt.Errorf("commenting on PR #%d: %w", s.pr.Number, err)
+			}
+			s.changed = true
+			return nil
+		}
 	}
 	comment := gh.BuildDiffComment(diff, repoFullName, baseBranch, base, newCommit, sinceJip && fromRecord)
 	if err := client.CommentOnPR(s.pr.Number, comment); err != nil {

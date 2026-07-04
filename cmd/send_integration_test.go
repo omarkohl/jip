@@ -580,6 +580,110 @@ func TestIntegration_SendPostsInterdiffComment(t *testing.T) {
 	}
 }
 
+// setupNoChangeResend creates a PR via a first send, then rebases the change
+// onto an advanced main without touching its content, so a second send pushes
+// a new commit whose interdiff is empty (a rebase-only update).
+func setupNoChangeResend(t *testing.T) (jj.Runner, *mockService, int) {
+	t.Helper()
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "handler.go", "package api", "feat: add request handler")
+	changeID := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	if len(mock.prs) != 1 {
+		mock.mu.Unlock()
+		t.Fatalf("expected 1 PR after first send, got %d", len(mock.prs))
+	}
+	var prNumber int
+	for n := range mock.prs {
+		prNumber = n
+	}
+	mock.mu.Unlock()
+
+	// Advance main with an unrelated change and rebase our change onto it.
+	// The commit ID changes (so the bookmark is pushed again) but the
+	// interdiff is empty.
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "other.go", "package other", "feat: unrelated change on main")
+	jjRun(t, repoDir, "bookmark", "set", "main", "-r", "@-")
+	jjRun(t, repoDir, "git", "push", "--bookmark", "main")
+	jjRun(t, repoDir, "rebase", "-r", changeID, "-d", "main")
+	jjRun(t, repoDir, "new", changeID)
+
+	return runner, mock, prNumber
+}
+
+// noChangeResend runs the second send after setupNoChangeResend and returns
+// the comments posted on the PR.
+func noChangeResend(t *testing.T, runner jj.Runner, mock *mockService, prNumber int, noChangeComment string) []string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:            "main",
+		remote:          "origin",
+		revsets:         []string{"@-"},
+		noChangeComment: noChangeComment,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("second send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	return mock.comments[prNumber]
+}
+
+func TestIntegration_SendNoChangeCommentDefault(t *testing.T) {
+	checkJJ(t)
+	runner, mock, prNumber := setupNoChangeResend(t)
+
+	comments := noChangeResend(t, runner, mock, prNumber, "default")
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d: %v", len(comments), comments)
+	}
+	if !strings.Contains(comments[0], "No code changes") {
+		t.Errorf("expected formatted no-change comment, got:\n%s", comments[0])
+	}
+}
+
+func TestIntegration_SendNoChangeCommentShort(t *testing.T) {
+	checkJJ(t)
+	runner, mock, prNumber := setupNoChangeResend(t)
+
+	comments := noChangeResend(t, runner, mock, prNumber, "short")
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d: %v", len(comments), comments)
+	}
+	if comments[0] != "No changes since last push." {
+		t.Errorf("expected short plain-text comment, got:\n%s", comments[0])
+	}
+}
+
+func TestIntegration_SendNoChangeCommentNone(t *testing.T) {
+	checkJJ(t)
+	runner, mock, prNumber := setupNoChangeResend(t)
+
+	comments := noChangeResend(t, runner, mock, prNumber, "none")
+	if len(comments) != 0 {
+		t.Errorf("expected no comments, got %d: %v", len(comments), comments)
+	}
+}
+
 // After any send, the PR body should carry the invisible pushed-commit marker
 // recording the commit that was pushed, so a later --diff-since-jip can use it.
 func TestIntegration_SendEmbedsPushedCommitMarker(t *testing.T) {
