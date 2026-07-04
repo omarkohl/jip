@@ -34,6 +34,35 @@ Global flags:
 | `--rebase` | | | Rebase the stack onto the base branch before sending |
 | `--diff-since-jip` | | | Diff against jip's own last send (recorded in the PR) instead of the current remote head |
 
+## Configuration files
+
+Workflow preferences can be set persistently instead of being passed as flags
+on every invocation. jip reads two TOML files:
+
+1. **Global** — `~/.config/jip/config.toml` (the platform's user config dir,
+   e.g. `$XDG_CONFIG_HOME/jip/config.toml`)
+2. **Repo** — `.jip.toml` in the repository root (commit it to share team
+   defaults)
+
+Repo values override global values; CLI flags override both.
+
+Keys mirror the `send` flag names: `base`, `remote`, `upstream`, `draft`,
+`no-stack`, `rebase`, `diff-since-jip`, `reviewer`. Per-invocation flags
+(`--dry-run`, `--existing`) cannot be set from config.
+
+```toml
+# ~/.config/jip/config.toml — personal preferences
+rebase = true
+diff-since-jip = true
+```
+
+```toml
+# .jip.toml (repo root) — team defaults
+base = "dev"
+draft = true
+reviewer = ["alice", "team/backend"]
+```
+
 ## Revsets
 
 `send` takes optional revset arguments to select which changes to send. The

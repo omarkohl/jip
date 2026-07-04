@@ -3,13 +3,17 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/omarkohl/jip/internal/auth"
+	"github.com/omarkohl/jip/internal/config"
 	gh "github.com/omarkohl/jip/internal/github"
 	"github.com/omarkohl/jip/internal/jj"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var sendCmd = &cobra.Command{
@@ -38,6 +42,38 @@ func init() {
 	sendCmd.Flags().Bool("diff-since-jip", false, "Diff against jip's own last send (recorded in the PR) instead of the current remote head, so direct pushes by others don't distort the \"changes since\" comment")
 
 	_ = sendCmd.RegisterFlagCompletionFunc("base", completeJJBookmarks)
+}
+
+// sendConfigKeys lists the send flags that may be set from config files.
+// Per-invocation flags (--dry-run, --existing) are deliberately excluded.
+var sendConfigKeys = map[string]bool{
+	"base":           true,
+	"remote":         true,
+	"upstream":       true,
+	"draft":          true,
+	"no-stack":       true,
+	"rebase":         true,
+	"diff-since-jip": true,
+	"reviewer":       true,
+}
+
+// applySendConfig sets flag values from config files for flags that were not
+// given on the command line, so CLI flags always win.
+func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
+	for _, key := range slices.Sorted(maps.Keys(cfg)) {
+		if !sendConfigKeys[key] {
+			return fmt.Errorf("unsupported config key %q (supported: %s)",
+				key, strings.Join(slices.Sorted(maps.Keys(sendConfigKeys)), ", "))
+		}
+		f := flags.Lookup(key)
+		if f.Changed {
+			continue
+		}
+		if err := flags.Set(key, cfg[key]); err != nil {
+			return fmt.Errorf("config key %q: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // sendOpts holds configuration for the send pipeline.
@@ -83,6 +119,20 @@ type skipReason struct {
 }
 
 func runSend(cmd *cobra.Command, args []string) error {
+	runner, repoRoot, err := workspaceRunner()
+	if err != nil {
+		return err
+	}
+
+	// Apply config file values to flags not set on the command line.
+	cfg, err := config.Load(repoRoot)
+	if err != nil {
+		return err
+	}
+	if err := applySendConfig(cmd.Flags(), cfg); err != nil {
+		return err
+	}
+
 	base, _ := cmd.Flags().GetString("base")
 	remote, _ := cmd.Flags().GetString("remote")
 	upstream, _ := cmd.Flags().GetString("upstream")
@@ -117,11 +167,6 @@ func runSend(cmd *cobra.Command, args []string) error {
 	_, _ = fmt.Fprintf(w, "Auth: %s\n", source)
 
 	// 2. Detect repo from remote.
-	runner, _, err := workspaceRunner()
-	if err != nil {
-		return err
-	}
-
 	remoteData, err := runner.GitRemoteList()
 	if err != nil {
 		return fmt.Errorf("listing remotes: %w", err)
