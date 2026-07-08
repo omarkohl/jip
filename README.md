@@ -20,6 +20,9 @@ request. When you update a PR, jip posts a comment showing what you changed
   reviewers and contributors don't need jip, and teams can freely mix jip and
   non-jip users
 - **Automatic bookmarks** — no need to manually create jj bookmarks
+- **Safe with private/WIP or conflicted commits** — these (and anything
+  stacked on top) are skipped automatically; everything else in the stack
+  still gets sent, so it's fine to just run `jip send`
 - **Supports forks** — works both for repositories where you have write access as well as forked ones
 - **Normal GitHub merge** — no special "land" command, just merge PRs as usual
 - **Stacks may contain merge commits** — supports non-linear revision graphs

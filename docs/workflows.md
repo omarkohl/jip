@@ -315,6 +315,19 @@ no stack navigation in the description.
 
 ![A single-commit PR with no stack navigation](images/independent-pr.png)
 
+### What happens if my stack has private, WIP, or conflicted commits?
+
+jip skips them automatically, along with anything stacked on top (a PR can't
+be built on a commit that wasn't pushed). Everything else in the revset is
+still sent, so it's safe to just run `jip send` without hand-picking revsets.
+
+- "Private" commits are those matching jj's `git.private-commits` config, e.g.
+  `wip:` or `private:` prefixed descriptions — see the
+  [batch workflow](#batch-workflow-many-independent-prs-at-once) above for how
+  to configure it.
+- Conflicted commits are additionally reported and cause a non-zero exit, so
+  scripts/CI still notice.
+
 ### Why does every PR target the final base branch instead of the previous PR's branch?
 
 Some stacking tools chain PR targets (PR #2 → PR #1's branch, PR #3 → PR #2's
