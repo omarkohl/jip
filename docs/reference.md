@@ -30,7 +30,8 @@ Global flags:
 | `--reviewer` | `-r` | | Add reviewers (repeatable, comma-separated) |
 | `--draft` | `-d` | | Create PRs as drafts |
 | `--existing` | `-x` | | Only update PRs that already exist (skip new ones) |
-| `--no-stack` | | | Send only the tip of each stack as a single PR |
+| `--stack` | | `default` | Stacking mode: `default` (stack navigation in PR descriptions), `gh-native` (GitHub's native stacked PRs), or `none` (send only the tip of each stack as a single PR) |
+| `--no-stack` | | | Deprecated — use `--stack=none` |
 | `--rebase` | | | Rebase the stack onto the base branch before sending |
 | `--diff-since-jip` | | | Diff against jip's own last send (recorded in the PR) instead of the current remote head |
 | `--no-change-comment` | | `default` | Comment posted when an updated PR has no code changes: `default`, `short`, or `none` |
@@ -57,7 +58,8 @@ from a team default without dirtying the committed `.jip.toml`. **Add
 `.jip.local.toml` to your `.gitignore`** — jip does not do this for you.
 
 Keys mirror the `send` flag names: `base`, `remote`, `upstream`, `draft`,
-`no-stack`, `rebase`, `diff-since-jip`, `reviewer`, `no-change-comment`.
+`stack`, `no-stack`, `rebase`, `diff-since-jip`, `reviewer`,
+`no-change-comment`.
 Per-invocation flags (`--dry-run`, `--existing`) cannot be set from config.
 
 ```toml
@@ -137,16 +139,51 @@ jip send --rebase
 This is equivalent to running `jj rebase` manually before `jip send`, but
 saves a step.
 
-## Single PR for a stack (`--no-stack`)
+## Stacking modes (`--stack`)
 
-By default, jip creates one PR per commit. Use `--no-stack` to bundle an
-entire linear stack into a single PR using the tip commit's bookmark and
-description. This is useful when all commits in the stack were already reviewed
-elsewhere (e.g. merging `main` into the `release` branch).
+By default, jip creates one PR per commit, all targeting the base branch, and
+renders stack navigation into each PR description. `--stack` selects other
+modes:
+
+### GitHub native stacked PRs (`--stack=gh-native`)
+
+Uses GitHub's built-in stacked-PRs feature (private preview — the repository
+must be enrolled via <https://gh.io/stacksbeta>). Each PR targets the branch
+of the change below it, and jip links the PRs into a native GitHub stack via
+the Stacks API — the same thing `gh stack link` does, without needing the `gh`
+CLI. GitHub's own UI then provides stack navigation, atomic merge-down, and
+server-side rebasing, so jip leaves PR descriptions as plain commit messages.
 
 ```bash
-jip send --no-stack
+jip send --stack=gh-native      # or set stack = "gh-native" in .jip.toml
 ```
+
+Notes:
+
+- Adding changes on top of a stack appends to the existing GitHub stack. The
+  Stacks API is append-only, so after reordering, removing, or inserting
+  changes mid-stack, jip dissolves the stack and recreates it (the PRs and
+  their reviews are untouched — only the stack association is rebuilt).
+- Sending only part of a stack (a narrower revset, or changes skipped for
+  conflicts) leaves the PRs above untouched: the GitHub stack is kept as is.
+- Stacks cannot span forks, so `--stack=gh-native` cannot be combined with
+  `--upstream`.
+- Branching (non-linear) stacks cannot be expressed; jip fails with an error.
+- If the repository is not enrolled in the preview, jip fails before making
+  any changes.
+
+### Single PR for a stack (`--stack=none`)
+
+Use `--stack=none` to bundle an entire linear stack into a single PR using the
+tip commit's bookmark and description. This is useful when all commits in the
+stack were already reviewed elsewhere (e.g. merging `main` into the `release`
+branch).
+
+```bash
+jip send --stack=none
+```
+
+The deprecated `--no-stack` flag is an alias for `--stack=none`.
 
 ## Diffing against jip's last send (`--diff-since-jip`)
 
@@ -168,7 +205,7 @@ jip send --diff-since-jip
 If the recorded commit isn't available locally (for example it was pushed from
 another machine and you haven't fetched it), jip can't compute the diff and
 instead posts a note saying so rather than a misleading one. jip writes the
-marker on every send (including `--no-stack` sends), and because each PR carries
+marker on every send (including `--stack=none` sends), and because each PR carries
 its own marker, this works across an entire stack. A PR only lacks a marker if
 jip has never sent it — for instance a PR created outside jip, or one last sent
 by a jip version predating this feature. In that case jip falls back to

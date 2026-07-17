@@ -94,6 +94,42 @@ func TestApplySendConfig_InvalidValue(t *testing.T) {
 	}
 }
 
+func TestResolveStackMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		stack        string
+		stackSet     bool
+		noStack      bool
+		noStackOnCLI bool
+		want         string
+		wantErr      bool
+	}{
+		{name: "default", stack: "default", want: "default"},
+		{name: "native", stack: "gh-native", stackSet: true, want: "gh-native"},
+		{name: "invalid value", stack: "nope", stackSet: true, wantErr: true},
+		{name: "no-stack alone", stack: "default", noStack: true, want: "none"},
+		{name: "config stack beats config no-stack", stack: "gh-native", stackSet: true, noStack: true, want: "gh-native"},
+		{name: "CLI no-stack beats config stack", stack: "gh-native", stackSet: true, noStack: true, noStackOnCLI: true, want: "none"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveStackMode(tt.stack, tt.stackSet, tt.noStack, tt.noStackOnCLI)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // Every key allowed in config must correspond to an actual send flag.
 func TestSendConfigKeys_MatchFlags(t *testing.T) {
 	for key := range sendConfigKeys {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,15 @@ type mockService struct {
 	nextPR    int
 	owner     string
 	repo      string
+
+	// Native stacked-PRs state. stacksEnabled mirrors the private-preview
+	// gate; call counters let tests assert reconciliation behavior.
+	stacksEnabled    bool
+	stacks           map[int]*gh.Stack
+	nextStack        int
+	createStackCalls int
+	addToStackCalls  int
+	unstackCalls     int
 }
 
 func newMockService() *mockService {
@@ -35,6 +45,8 @@ func newMockService() *mockService {
 		nextPR:    1,
 		owner:     "testowner",
 		repo:      "testrepo",
+		stacks:    make(map[int]*gh.Stack),
+		nextStack: 1,
 	}
 }
 
@@ -109,6 +121,94 @@ func (m *mockService) LookupPRsByBranch(branches []string) (map[string]*gh.PRInf
 		}
 	}
 	return result, nil
+}
+
+func (m *mockService) StacksEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stacksEnabled, nil
+}
+
+func (m *mockService) FindStackForPR(number int) (*gh.Stack, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, st := range m.stacks {
+		for _, p := range st.PullRequests {
+			if p.Number == number {
+				return st, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// checkChained enforces the API's base-to-head chain requirement: each PR's
+// base must be the head branch of the PR below it.
+func (m *mockService) checkChained(below, above int) error {
+	prBelow, prAbove := m.prs[below], m.prs[above]
+	if prBelow == nil || prAbove == nil {
+		return fmt.Errorf("unknown PR in stack request (#%d, #%d)", below, above)
+	}
+	if prAbove.BaseRefName != prBelow.HeadRefName {
+		return fmt.Errorf("PR #%d base %q does not match PR #%d head %q",
+			above, prAbove.BaseRefName, below, prBelow.HeadRefName)
+	}
+	return nil
+}
+
+func (m *mockService) CreateStack(prNumbers []int) (*gh.Stack, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createStackCalls++
+	if len(prNumbers) < 2 {
+		return nil, fmt.Errorf("a stack requires at least 2 PRs, got %d", len(prNumbers))
+	}
+	for i := 1; i < len(prNumbers); i++ {
+		if err := m.checkChained(prNumbers[i-1], prNumbers[i]); err != nil {
+			return nil, err
+		}
+	}
+	st := &gh.Stack{
+		Number: m.nextStack,
+		Open:   true,
+		Base:   gh.StackBase{Ref: m.prs[prNumbers[0]].BaseRefName},
+	}
+	m.nextStack++
+	for _, n := range prNumbers {
+		st.PullRequests = append(st.PullRequests, gh.StackPR{Number: n, State: "open"})
+	}
+	m.stacks[st.Number] = st
+	return st, nil
+}
+
+func (m *mockService) AddToStack(stackNumber int, prNumbers []int) (*gh.Stack, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.addToStackCalls++
+	st := m.stacks[stackNumber]
+	if st == nil {
+		return nil, fmt.Errorf("no such stack #%d", stackNumber)
+	}
+	prev := st.PullRequests[len(st.PullRequests)-1].Number
+	for _, n := range prNumbers {
+		if err := m.checkChained(prev, n); err != nil {
+			return nil, err
+		}
+		st.PullRequests = append(st.PullRequests, gh.StackPR{Number: n, State: "open"})
+		prev = n
+	}
+	return st, nil
+}
+
+func (m *mockService) Unstack(stackNumber int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unstackCalls++
+	if _, ok := m.stacks[stackNumber]; !ok {
+		return false, fmt.Errorf("no such stack #%d", stackNumber)
+	}
+	delete(m.stacks, stackNumber)
+	return true, nil
 }
 
 func TestIntegration_SendCreatesNewPRs(t *testing.T) {
@@ -1036,10 +1136,10 @@ func TestIntegration_SendNoStack(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := executeSend(runner, mock, sendOpts{
-		base:    "main",
-		remote:  "origin",
-		revsets: []string{"@-"},
-		noStack: true,
+		base:      "main",
+		remote:    "origin",
+		revsets:   []string{"@-"},
+		stackMode: stackModeNone,
 	}, &buf)
 	if err != nil {
 		t.Fatalf("send --no-stack failed: %v\nOutput:\n%s", err, buf.String())
@@ -2157,4 +2257,539 @@ func writeAndCommit(t *testing.T, dir, filename, content, message string) {
 		t.Fatalf("writing %s: %v", filename, err)
 	}
 	jjRun(t, dir, "commit", "-m", message)
+}
+
+// singleStackPRNumbers returns the PR numbers of the single stack in the
+// mock, bottom to top. Fails the test unless exactly one stack exists.
+func singleStackPRNumbers(t *testing.T, m *mockService) []int {
+	t.Helper()
+	if len(m.stacks) != 1 {
+		t.Fatalf("expected exactly 1 GitHub stack, got %d", len(m.stacks))
+	}
+	for _, st := range m.stacks {
+		var nums []int
+		for _, p := range st.PullRequests {
+			nums = append(nums, p.Number)
+		}
+		return nums
+	}
+	return nil
+}
+
+func TestIntegration_SendNativeStackCreates(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two\n\nMore detail.")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:      "main",
+		remote:    "origin",
+		revsets:   []string{"@-"},
+		stackMode: stackModeNative,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send --stack=gh-native failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.prs) != 2 {
+		t.Fatalf("expected 2 PRs, got %d", len(mock.prs))
+	}
+	bottom, top := mock.prs[1], mock.prs[2]
+
+	// Bases must be chained: bottom targets main, top targets bottom's branch.
+	if bottom.BaseRefName != "main" {
+		t.Errorf("bottom PR base = %q, want main", bottom.BaseRefName)
+	}
+	if top.BaseRefName != bottom.HeadRefName {
+		t.Errorf("top PR base = %q, want bottom head %q", top.BaseRefName, bottom.HeadRefName)
+	}
+
+	// One native stack with both PRs, bottom to top.
+	if nums := singleStackPRNumbers(t, mock); !slices.Equal(nums, []int{1, 2}) {
+		t.Errorf("stack PRs = %v, want [1 2]", nums)
+	}
+
+	// Bodies carry the commit message and the pushed-commit marker, but no
+	// jip stack navigation (GitHub's UI shows the stack).
+	for _, pr := range mock.prs {
+		if strings.Contains(pr.Body, "stacked PR") || strings.Contains(pr.Body, "PRs:") {
+			t.Errorf("PR #%d body should not contain jip stack navigation:\n%s", pr.Number, pr.Body)
+		}
+		if !strings.Contains(pr.Body, "jip:pushed-commit=") {
+			t.Errorf("PR #%d body missing pushed-commit marker:\n%s", pr.Number, pr.Body)
+		}
+	}
+	if !strings.Contains(top.Body, "More detail.") {
+		t.Errorf("top PR body missing commit message body:\n%s", top.Body)
+	}
+
+	if !strings.Contains(output, "GitHub stack #1: linked 2 PR(s)") {
+		t.Errorf("expected stack link message in output, got:\n%s", output)
+	}
+}
+
+func TestIntegration_SendNativeStackSplitsAtPrivateMerge(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+	jjRun(t, repoDir, "config", "set", "--repo", "git.private-commits", "description(glob:'private:*')")
+
+	// Two independent stacks are connected only by a private merge:
+	// main -> A -> B -> C -> D --\
+	// main -> X ---------------- private merge
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: A")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: B")
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: C")
+	writeAndCommit(t, repoDir, "d.go", "package d", "feat: D")
+	chainTip := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", "main")
+	writeAndCommit(t, repoDir, "x.go", "package x", "feat: X")
+	standalone := getChangeID(t, repoDir, "@-")
+
+	jjRun(t, repoDir, "new", chainTip, standalone)
+	writeAndCommit(t, repoDir, "merge.go", "package merge", "private: local merge")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:      "main",
+		remote:    "origin",
+		revsets:   []string{"@-"},
+		stackMode: stackModeNative,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send --stack=gh-native failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 5 {
+		t.Fatalf("expected 5 PRs, got %d", len(mock.prs))
+	}
+	if len(mock.stacks) != 1 {
+		t.Fatalf("expected one four-PR native stack and one standalone PR, got %d native stacks", len(mock.stacks))
+	}
+
+	var stack *gh.Stack
+	for _, st := range mock.stacks {
+		stack = st
+	}
+	if len(stack.PullRequests) != 4 {
+		t.Fatalf("native stack has %d PRs, want 4", len(stack.PullRequests))
+	}
+	stackTitles := make(map[string]bool)
+	for _, p := range stack.PullRequests {
+		stackTitles[mock.prs[p.Number].Title] = true
+	}
+	for _, title := range []string{"feat: A", "feat: B", "feat: C", "feat: D"} {
+		if !stackTitles[title] {
+			t.Errorf("native stack missing %q", title)
+		}
+	}
+	for _, pr := range mock.prs {
+		if pr.Title == "feat: X" && pr.BaseRefName != "main" {
+			t.Errorf("standalone PR base = %q, want main", pr.BaseRefName)
+		}
+	}
+}
+
+func TestIntegration_SendNativeStackAppend(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// New change on top of the stack: append, don't recreate.
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: part three")
+	buf.Reset()
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("second send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("Output:\n%s", buf.String())
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if mock.addToStackCalls != 1 {
+		t.Errorf("addToStackCalls = %d, want 1", mock.addToStackCalls)
+	}
+	if mock.unstackCalls != 0 {
+		t.Errorf("unstackCalls = %d, want 0 (append must not recreate the stack)", mock.unstackCalls)
+	}
+	if mock.createStackCalls != 1 {
+		t.Errorf("createStackCalls = %d, want 1", mock.createStackCalls)
+	}
+	if nums := singleStackPRNumbers(t, mock); !slices.Equal(nums, []int{1, 2, 3}) {
+		t.Errorf("stack PRs = %v, want [1 2 3]", nums)
+	}
+	if !strings.Contains(buf.String(), "GitHub stack #1: added 1 PR(s)") {
+		t.Errorf("expected append message in output, got:\n%s", buf.String())
+	}
+}
+
+func TestIntegration_SendNativeStackUpToDate(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	buf.Reset()
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("second send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if mock.unstackCalls != 0 || mock.addToStackCalls != 0 || mock.createStackCalls != 1 {
+		t.Errorf("unchanged resend must not touch the stack: unstack=%d add=%d create=%d",
+			mock.unstackCalls, mock.addToStackCalls, mock.createStackCalls)
+	}
+	if !strings.Contains(buf.String(), "GitHub stack #1: up to date") {
+		t.Errorf("expected up-to-date message in output, got:\n%s", buf.String())
+	}
+}
+
+func TestIntegration_SendNativeStackRestructure(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: part three")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// Remove the middle change: the append-only stack API cannot express
+	// this, so jip must dissolve and recreate the stack.
+	midID := getChangeID(t, repoDir, "@--")
+	jjRun(t, repoDir, "abandon", "-r", midID)
+
+	buf.Reset()
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("second send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("Output:\n%s", buf.String())
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if mock.unstackCalls != 1 {
+		t.Errorf("unstackCalls = %d, want 1", mock.unstackCalls)
+	}
+	if mock.createStackCalls != 2 {
+		t.Errorf("createStackCalls = %d, want 2", mock.createStackCalls)
+	}
+	if nums := singleStackPRNumbers(t, mock); !slices.Equal(nums, []int{1, 3}) {
+		t.Errorf("stack PRs = %v, want [1 3]", nums)
+	}
+	// The top PR must have been retargeted onto the bottom PR's branch.
+	if mock.prs[3].BaseRefName != mock.prs[1].HeadRefName {
+		t.Errorf("top PR base = %q, want %q", mock.prs[3].BaseRefName, mock.prs[1].HeadRefName)
+	}
+	if !strings.Contains(buf.String(), "Dissolved GitHub stack #1") {
+		t.Errorf("expected dissolve message in output, got:\n%s", buf.String())
+	}
+}
+
+func TestIntegration_SendNativeStackPartialSend(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: part three")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// Re-send only the bottom two changes. The remote stack extends above
+	// them, but nothing local contradicts it — jip must leave it alone rather
+	// than dissolving a stack the user did not ask about.
+	buf.Reset()
+	opts.revsets = []string{"@--"}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("partial send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("Output:\n%s", buf.String())
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if mock.unstackCalls != 0 {
+		t.Errorf("unstackCalls = %d, want 0", mock.unstackCalls)
+	}
+	if mock.createStackCalls != 1 {
+		t.Errorf("createStackCalls = %d, want 1", mock.createStackCalls)
+	}
+	if nums := singleStackPRNumbers(t, mock); !slices.Equal(nums, []int{1, 2, 3}) {
+		t.Errorf("stack PRs = %v, want [1 2 3]", nums)
+	}
+	// The untouched top PR must keep its chained base.
+	if mock.prs[3].BaseRefName != mock.prs[2].HeadRefName {
+		t.Errorf("top PR base = %q, want %q", mock.prs[3].BaseRefName, mock.prs[2].HeadRefName)
+	}
+}
+
+func TestIntegration_SendNativeStackInsertBelow(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	idBottom := getChangeID(t, repoDir, "@-")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+	idTop := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// Insert a new change between the two: an existing PR ends up above a
+	// new one, which the append-only stack API cannot express — jip must
+	// dissolve and recreate the stack, retargeting the top PR mid-run.
+	jjRun(t, repoDir, "new", "--insert-after", idBottom)
+	writeAndCommit(t, repoDir, "m.go", "package m", "feat: part one and a half")
+
+	buf.Reset()
+	opts.revsets = []string{idTop}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("second send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("Output:\n%s", buf.String())
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if mock.unstackCalls != 1 {
+		t.Errorf("unstackCalls = %d, want 1", mock.unstackCalls)
+	}
+	if mock.createStackCalls != 2 {
+		t.Errorf("createStackCalls = %d, want 2", mock.createStackCalls)
+	}
+	// Stack order is bottom to top: old bottom, inserted change, old top.
+	if nums := singleStackPRNumbers(t, mock); !slices.Equal(nums, []int{1, 3, 2}) {
+		t.Errorf("stack PRs = %v, want [1 3 2]", nums)
+	}
+	// Bases must be re-chained through the inserted PR.
+	if mock.prs[3].BaseRefName != mock.prs[1].HeadRefName {
+		t.Errorf("inserted PR base = %q, want %q", mock.prs[3].BaseRefName, mock.prs[1].HeadRefName)
+	}
+	if mock.prs[2].BaseRefName != mock.prs[3].HeadRefName {
+		t.Errorf("top PR base = %q, want %q", mock.prs[2].BaseRefName, mock.prs[3].HeadRefName)
+	}
+	if !strings.Contains(buf.String(), "Dissolved GitHub stack #1") {
+		t.Errorf("expected dissolve message in output, got:\n%s", buf.String())
+	}
+}
+
+func TestIntegration_SendDefaultWarnsOnChainedBase(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("gh-native send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// Switching back to default mode must not silently keep the top PR
+	// targeting the bottom PR's branch — merging it would land there
+	// instead of main. jip warns but does not retarget.
+	buf.Reset()
+	opts.stackMode = stackModeDefault
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("default send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("Output:\n%s", buf.String())
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if !strings.Contains(buf.String(), "warning: PR #2 targets") {
+		t.Errorf("expected chained-base warning in output, got:\n%s", buf.String())
+	}
+	if mock.prs[2].BaseRefName != mock.prs[1].HeadRefName {
+		t.Errorf("default mode must not retarget: PR #2 base = %q", mock.prs[2].BaseRefName)
+	}
+}
+
+func TestIntegration_SendNativeStackNotEnabled(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService() // stacksEnabled defaults to false
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:      "main",
+		remote:    "origin",
+		revsets:   []string{"@-"},
+		stackMode: stackModeNative,
+	}, &buf)
+	if err == nil {
+		t.Fatal("expected error when stacked PRs are not enabled")
+	}
+	if !strings.Contains(err.Error(), "not enabled") || !strings.Contains(err.Error(), "stacksbeta") {
+		t.Errorf("error should explain the preview gate, got: %v", err)
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 0 {
+		t.Errorf("no PRs must be created when the check fails, got %d", len(mock.prs))
+	}
+}
+
+func TestIntegration_SendNativeStackSinglePR(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: standalone")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:      "main",
+		remote:    "origin",
+		revsets:   []string{"@-"},
+		stackMode: stackModeNative,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(mock.prs))
+	}
+	if mock.createStackCalls != 0 || len(mock.stacks) != 0 {
+		t.Errorf("a single PR must not create a stack (calls=%d, stacks=%d)",
+			mock.createStackCalls, len(mock.stacks))
+	}
+}
+
+func TestIntegration_SendNativeStackNonLinear(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	// A fork: two children on top of the same change.
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: base change")
+	idA := getChangeID(t, repoDir, "@-")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: branch B")
+	idB := getChangeID(t, repoDir, "@-")
+	jjRun(t, repoDir, "new", idA)
+	writeAndCommit(t, repoDir, "c.go", "package c", "feat: branch C")
+	idC := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:      "main",
+		remote:    "origin",
+		revsets:   []string{idB, idC},
+		stackMode: stackModeNative,
+	}, &buf)
+	if err == nil {
+		t.Fatal("expected error for non-linear stack in gh-native mode")
+	}
+	if !strings.Contains(err.Error(), "linear") {
+		t.Errorf("error should mention linearity, got: %v", err)
+	}
+}
+
+func TestIntegration_SendNativeStackCrossFork(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	var buf bytes.Buffer
+	err := executeSend(runner, mock, sendOpts{
+		base:      "main",
+		remote:    "origin",
+		upstream:  "upstream",
+		revsets:   []string{"@-"},
+		stackMode: stackModeNative,
+	}, &buf)
+	if err == nil {
+		t.Fatal("expected error for --upstream with gh-native stacks")
+	}
+	if !strings.Contains(err.Error(), "forks") {
+		t.Errorf("error should mention forks, got: %v", err)
+	}
 }
