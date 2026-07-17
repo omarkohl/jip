@@ -23,7 +23,11 @@ var sendCmd = &cobra.Command{
 	Long: `Send creates or updates GitHub pull requests for each change in the
 resolved stack. Each change gets its own PR targeting the base branch.
 
-Default revset is @- (the last committed change and its ancestors up to base).`,
+Default revset is @- (the last committed change and its ancestors up to base).
+
+The --stack flag selects how stacks are represented: navigation rendered into
+PR descriptions (default), GitHub's native stacked PRs (gh-native, requires
+preview access), or a single PR for the stack tip (none).`,
 	RunE:              runSend,
 	ValidArgsFunction: completeJJRevsets,
 }
@@ -37,7 +41,9 @@ func init() {
 	sendCmd.Flags().StringSliceP("reviewer", "r", nil, "Add reviewers (repeatable, comma-separated)")
 	sendCmd.Flags().BoolP("draft", "d", false, "Create PRs as drafts")
 	sendCmd.Flags().BoolP("existing", "x", false, "Only update PRs that already exist (skip new ones)")
+	sendCmd.Flags().String("stack", stackModeDefault, "Stacking mode: default (stack navigation in PR descriptions), gh-native (GitHub's native stacked PRs, requires preview access), or none (send only the tip of each stack as a single PR)")
 	sendCmd.Flags().Bool("no-stack", false, "Send only the tip of each stack as a single PR")
+	_ = sendCmd.Flags().MarkDeprecated("no-stack", "use --stack=none")
 	sendCmd.Flags().Bool("rebase", false, "Rebase the stack onto the base branch before sending")
 	sendCmd.Flags().Bool("diff-since-jip", false, "Diff against jip's own last send (recorded in the PR) instead of the current remote head, so direct pushes by others don't distort the \"changes since\" comment")
 	sendCmd.Flags().String("no-change-comment", "default", "Comment posted when an updated PR has no code changes: default (formatted comment), short (one plain line), or none")
@@ -45,7 +51,16 @@ func init() {
 	_ = sendCmd.RegisterFlagCompletionFunc("base", completeJJBookmarks)
 	_ = sendCmd.RegisterFlagCompletionFunc("no-change-comment",
 		cobra.FixedCompletions([]string{"default", "short", "none"}, cobra.ShellCompDirectiveNoFileComp))
+	_ = sendCmd.RegisterFlagCompletionFunc("stack",
+		cobra.FixedCompletions([]string{stackModeDefault, stackModeNative, stackModeNone}, cobra.ShellCompDirectiveNoFileComp))
 }
+
+// Stacking modes for the --stack flag.
+const (
+	stackModeDefault = "default"   // stack navigation rendered into PR descriptions
+	stackModeNative  = "gh-native" // GitHub's native stacked PRs (private preview)
+	stackModeNone    = "none"      // single PR per stack tip, no stacking
+)
 
 // sendConfigKeys lists the send flags that may be set from config files.
 // Per-invocation flags (--dry-run, --existing) are deliberately excluded.
@@ -54,6 +69,7 @@ var sendConfigKeys = map[string]bool{
 	"remote":            true,
 	"upstream":          true,
 	"draft":             true,
+	"stack":             true,
 	"no-stack":          true,
 	"rebase":            true,
 	"diff-since-jip":    true,
@@ -80,6 +96,24 @@ func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
 	return nil
 }
 
+// resolveStackMode reconciles the --stack flag with the deprecated --no-stack.
+// CLI flags beat config values: --no-stack on the command line overrides a
+// config-supplied stack key, while an explicit --stack overrides a
+// config-supplied no-stack. stackSet reports whether --stack was set at all
+// (CLI or config); noStackOnCLI whether --no-stack was given on the CLI.
+func resolveStackMode(stack string, stackSet, noStack, noStackOnCLI bool) (string, error) {
+	switch stack {
+	case stackModeDefault, stackModeNative, stackModeNone:
+	default:
+		return "", fmt.Errorf("invalid --stack value %q (valid: %s, %s, %s)",
+			stack, stackModeDefault, stackModeNative, stackModeNone)
+	}
+	if noStack && (noStackOnCLI || !stackSet) {
+		return stackModeNone, nil
+	}
+	return stack, nil
+}
+
 // sendOpts holds configuration for the send pipeline.
 type sendOpts struct {
 	base            string
@@ -90,7 +124,7 @@ type sendOpts struct {
 	dryRun          bool
 	draft           bool
 	existing        bool
-	noStack         bool
+	stackMode       string // stackModeDefault (or ""), stackModeNative, or stackModeNone
 	rebase          bool
 	diffSinceJip    bool
 	noChangeComment string // "default" (or ""), "short", or "none"
@@ -129,6 +163,14 @@ func runSend(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Record which stack flags came from the command line before config
+	// application marks config-supplied flags as changed too.
+	stackOnCLI := cmd.Flags().Changed("stack")
+	noStackOnCLI := cmd.Flags().Changed("no-stack")
+	if stackOnCLI && noStackOnCLI {
+		return fmt.Errorf("--no-stack is deprecated and cannot be combined with --stack (use --stack=none)")
+	}
+
 	// Apply config file values to flags not set on the command line.
 	cfg, err := config.Load(repoRoot)
 	if err != nil {
@@ -154,7 +196,12 @@ func runSend(cmd *cobra.Command, args []string) error {
 	reviewers = cleanReviewers
 	draft, _ := cmd.Flags().GetBool("draft")
 	existing, _ := cmd.Flags().GetBool("existing")
+	stackFlag, _ := cmd.Flags().GetString("stack")
 	noStack, _ := cmd.Flags().GetBool("no-stack")
+	stackMode, err := resolveStackMode(stackFlag, cmd.Flags().Changed("stack"), noStack, noStackOnCLI)
+	if err != nil {
+		return err
+	}
 	rebase, _ := cmd.Flags().GetBool("rebase")
 	diffSinceJip, _ := cmd.Flags().GetBool("diff-since-jip")
 	noChangeComment, _ := cmd.Flags().GetString("no-change-comment")
@@ -232,7 +279,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 		dryRun:          dryRun,
 		draft:           draft,
 		existing:        existing,
-		noStack:         noStack,
+		stackMode:       stackMode,
 		rebase:          rebase,
 		diffSinceJip:    diffSinceJip,
 		noChangeComment: noChangeComment,
@@ -264,6 +311,25 @@ func workspaceRunner() (jj.Runner, string, error) {
 // executeSend runs the core send algorithm: resolve stacks, ensure bookmarks,
 // push branches, and create/update PRs.
 func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer) error {
+	if opts.stackMode == "" {
+		opts.stackMode = stackModeDefault
+	}
+
+	// gh-native mode: fail fast, before mutating anything.
+	if opts.stackMode == stackModeNative {
+		if opts.upstream != "" {
+			return fmt.Errorf("--stack=gh-native does not support --upstream: GitHub native stacks cannot span forks")
+		}
+		enabled, err := client.StacksEnabled()
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return fmt.Errorf("GitHub native stacked PRs are not enabled for %s/%s — the feature is a private preview (https://gh.io/stacksbeta); use --stack=default until the repository is enrolled",
+				client.Owner(), client.Repo())
+		}
+	}
+
 	// Fetch from remote (and upstream if it's a named remote).
 	_, _ = fmt.Fprintf(w, "Fetching %s...\n", opts.remote)
 	if err := runner.GitFetch(opts.remote); err != nil {
@@ -296,12 +362,12 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		return nil
 	}
 
-	// If --no-stack, reduce each DAG to its tip (leaf) change only.
-	if opts.noStack {
+	// If --stack=none, reduce each DAG to its tip (leaf) change only.
+	if opts.stackMode == stackModeNone {
 		for i, dag := range dags {
 			leaves := dag.LeafChanges()
 			if len(leaves) != 1 {
-				return fmt.Errorf("--no-stack requires a linear stack (found %d tips in one DAG)", len(leaves))
+				return fmt.Errorf("--stack=none requires a linear stack (found %d tips in one DAG)", len(leaves))
 			}
 			tip := leaves[0]
 			dags[i] = &jj.ChangeDAG{
@@ -531,6 +597,14 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 	}
 
+	// GitHub native stacks cannot express branching or merging dependency
+	// graphs — each stack must be a single linear chain.
+	if opts.stackMode == stackModeNative {
+		if err := checkLinearStacks(activeStates); err != nil {
+			return err
+		}
+	}
+
 	if opts.dryRun {
 		_, _ = fmt.Fprintf(w, "\nDry run — %d change(s) would be sent:\n\n", len(activeStates))
 		for _, s := range activeStates {
@@ -544,6 +618,9 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 			_, _ = fmt.Fprintf(w, "  %s  %.12s  %s\n", action, s.change.ChangeID, s.change.Title())
 			_, _ = fmt.Fprintf(w, "         bookmark: %s (%s)\n", s.bookmark.Bookmark, bmStatus)
+		}
+		if opts.stackMode == stackModeNative && len(activeStates) > 1 {
+			_, _ = fmt.Fprintf(w, "\nPRs would be linked into native GitHub stack(s).\n")
 		}
 		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
 			printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
@@ -606,6 +683,36 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 	if len(activeStates) > 0 {
 		// 8. Create/update PRs.
+		//
+		// In gh-native mode each PR targets the branch of the change below it
+		// (GitHub's stack API requires a valid base-to-head chain); otherwise
+		// every PR targets the base branch.
+		groups := stackGroups(activeStates)
+		desiredBase := make(map[string]string, len(activeStates))
+		activeBookmarks := make(map[string]bool, len(activeStates))
+		for _, group := range groups {
+			prev := baseBranch
+			for _, s := range group {
+				desiredBase[s.change.ChangeID] = prev
+				activeBookmarks[s.bookmark.Bookmark] = true
+				if opts.stackMode == stackModeNative {
+					prev = s.bookmark.Bookmark
+				}
+			}
+		}
+
+		// 8a. gh-native: inspect the stacks the existing PRs belong to, and
+		// dissolve any that the append-only stacks API can no longer express
+		// (reorders, mid-stack inserts/removals, base changes) before any PR
+		// base is touched.
+		var stackPlans []nativeStackPlan
+		if opts.stackMode == stackModeNative {
+			stackPlans, err = prepareNativeStacks(client, groups, baseBranch, w)
+			if err != nil {
+				return err
+			}
+		}
+
 		for i := range activeStates {
 			s := &activeStates[i]
 			if s.pr != nil {
@@ -616,6 +723,27 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 						return fmt.Errorf("updating PR #%d title: %w", s.pr.Number, err)
 					}
 					s.changed = true
+				}
+
+				// Retarget the PR when its base does not match the chain
+				// (gh-native) — e.g. a new change was inserted below it. In the
+				// other modes jip must not override a base the user chose, so
+				// it only warns, and only when the base looks like a leftover
+				// chained base from an earlier gh-native send (it points at
+				// another branch in this send, so merging would land there
+				// instead of the base branch).
+				if base := desiredBase[s.change.ChangeID]; s.pr.BaseRefName != base {
+					switch {
+					case opts.stackMode == stackModeNative:
+						if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Base: &base}); err != nil {
+							return fmt.Errorf("updating PR #%d base: %w", s.pr.Number, err)
+						}
+						s.pr.BaseRefName = base
+						s.changed = true
+					case activeBookmarks[s.pr.BaseRefName]:
+						_, _ = fmt.Fprintf(w, "  warning: PR #%d targets %q, not %q — if this is a leftover from --stack=gh-native, retarget the PR on GitHub or re-send with --stack=gh-native\n",
+							s.pr.Number, s.pr.BaseRefName, base)
+					}
 				}
 
 				// Post "changes since" comment. By default the base is the old
@@ -640,7 +768,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				if opts.pushOwner != "" {
 					head = opts.pushOwner + ":" + head
 				}
-				pr, err := client.CreatePR(head, baseBranch, title, s.change.Body(), opts.draft)
+				pr, err := client.CreatePR(head, desiredBase[s.change.ChangeID], title, s.change.Body(), opts.draft)
 				if err != nil {
 					return fmt.Errorf("creating PR for %s: %w", s.change.ChangeID, err)
 				}
@@ -655,19 +783,29 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 9. Update all PR bodies with stack navigation (skip nav when
-		// --no-stack) plus the invisible pushed-commit marker that records this
-		// push for a later --diff-since-jip.
+		// 8b. gh-native: link the PRs into native GitHub stacks now that every
+		// PR exists with a chained base.
+		if opts.stackMode == stackModeNative {
+			if err := finalizeNativeStacks(client, groups, stackPlans, w); err != nil {
+				return err
+			}
+		}
+
+		// 9. Update all PR bodies plus the invisible pushed-commit marker that
+		// records this push for a later --diff-since-jip. Stack navigation is
+		// rendered into the body only in default mode: with gh-native stacks
+		// GitHub's own UI shows the stack, and with --stack=none there is none.
 		//
 		// Each PR's stack only includes its ancestors and descendants (its
 		// dependency chain), not unrelated branches in the same DAG.
+		bodyNav := opts.stackMode == stackModeDefault
 		var perChangeStack [][]int
-		if !opts.noStack {
+		if bodyNav {
 			perChangeStack = computeStackPRs(activeStates)
 		}
 		for i, s := range activeStates {
 			body := s.change.Body()
-			if !opts.noStack {
+			if bodyNav {
 				body = gh.BuildStackedPRBody(
 					s.change.CommitID,
 					repoFullName,
@@ -860,6 +998,229 @@ func computeStackPRs(states []changeState) [][]int {
 		result[i] = prs
 	}
 	return result
+}
+
+// stackGroups splits states into connected groups, preserving topological
+// (bottom-to-top) order. Skipping a merge can disconnect one resolved DAG into
+// multiple stacks. The returned pointers alias the input slice, so later
+// mutations of the states are visible through the groups.
+func stackGroups(states []changeState) [][]*changeState {
+	byID := make(map[string]int, len(states))
+	for i := range states {
+		byID[states[i].change.ChangeID] = i
+	}
+
+	parent := make([]int, len(states))
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(i int) int {
+		if parent[i] != i {
+			parent[i] = find(parent[i])
+		}
+		return parent[i]
+	}
+	for i := range states {
+		for _, parentID := range states[i].change.ParentIDs {
+			if parentIdx, ok := byID[parentID]; ok {
+				parent[find(i)] = find(parentIdx)
+			}
+		}
+	}
+
+	var groups [][]*changeState
+	groupByRoot := make(map[int]int)
+	for i := range states {
+		root := find(i)
+		group, ok := groupByRoot[root]
+		if !ok {
+			group = len(groups)
+			groupByRoot[root] = group
+			groups = append(groups, nil)
+		}
+		groups[group] = append(groups[group], &states[i])
+	}
+	return groups
+}
+
+// checkLinearStacks verifies that the active changes form linear chains:
+// no change may have more than one parent or child among the changes being
+// sent. GitHub native stacks cannot express branching dependency graphs.
+func checkLinearStacks(states []changeState) error {
+	inSet := make(map[string]bool, len(states))
+	for _, s := range states {
+		inSet[s.change.ChangeID] = true
+	}
+	parentCount := make(map[string]int)
+	childCount := make(map[string]int)
+	for _, s := range states {
+		for _, pid := range s.change.ParentIDs {
+			if inSet[pid] {
+				parentCount[s.change.ChangeID]++
+				childCount[pid]++
+			}
+		}
+	}
+	for _, s := range states {
+		id := s.change.ChangeID
+		if parentCount[id] > 1 {
+			return fmt.Errorf("--stack=gh-native requires linear stacks, but change %.12s (%s) has %d parents in the stack — reshape the stack or use --stack=default",
+				id, s.change.Title(), parentCount[id])
+		}
+		if childCount[id] > 1 {
+			return fmt.Errorf("--stack=gh-native requires linear stacks, but change %.12s (%s) has %d children in the stack — reshape the stack or use --stack=default",
+				id, s.change.Title(), childCount[id])
+		}
+	}
+	return nil
+}
+
+// nativeStackPlan records, per stack group, how to reconcile the local chain
+// with GitHub: leave keep untouched, append the chain PRs above prefixLen to
+// appendTo, or create a fresh stack when both are nil (incompatible remote
+// stacks were already dissolved by prepareNativeStacks).
+type nativeStackPlan struct {
+	appendTo  *gh.Stack
+	prefixLen int
+	keep      *gh.Stack
+}
+
+// prepareNativeStacks inspects the GitHub stacks that the existing PRs belong
+// to, before any PR is modified. The stacks API is append-only, so a remote
+// stack that no longer matches the local chain (reordered, mid-stack insert
+// or removal, changed base) is dissolved here and recreated later; dissolving
+// first keeps the PR base updates that follow from conflicting with
+// server-side stack state.
+func prepareNativeStacks(client gh.Service, groups [][]*changeState, baseBranch string, w io.Writer) ([]nativeStackPlan, error) {
+	plans := make([]nativeStackPlan, len(groups))
+	for gi, group := range groups {
+		// Existing PR numbers bottom-to-top; an existing PR above a new one
+		// would need a mid-stack insert, which appending cannot express.
+		var existing []int
+		sawNew, newBelowExisting := false, false
+		for _, s := range group {
+			if s.pr != nil {
+				if sawNew {
+					newBelowExisting = true
+				}
+				existing = append(existing, s.pr.Number)
+			} else {
+				sawNew = true
+			}
+		}
+
+		// Find the distinct stacks the existing PRs belong to. A PR belongs
+		// to at most one stack, so membership in a found stack answers the
+		// lookup for the other PRs it lists.
+		var stacks []*gh.Stack
+		resolved := make(map[int]bool)
+		for _, num := range existing {
+			if resolved[num] {
+				continue
+			}
+			resolved[num] = true
+			st, err := client.FindStackForPR(num)
+			if err != nil {
+				return nil, err
+			}
+			if st == nil {
+				continue
+			}
+			stacks = append(stacks, st)
+			for _, p := range st.PullRequests {
+				resolved[p.Number] = true
+			}
+		}
+
+		if len(stacks) == 0 {
+			continue // nothing on GitHub yet; a stack is created later
+		}
+
+		sameStack := len(stacks) == 1 && !newBelowExisting &&
+			stacks[0].Base.Ref == baseBranch
+		open := stacks[0].OpenPRNumbers()
+		switch {
+		case sameStack && slices.Equal(open, existing):
+			plans[gi] = nativeStackPlan{appendTo: stacks[0], prefixLen: len(existing)}
+			continue
+		case sameStack && len(existing) == len(group) && len(existing) < len(open) &&
+			slices.Equal(open[:len(existing)], existing):
+			// The remote stack extends above the changes being sent — a
+			// partial send (`jip send -r <mid-stack change>`), or descendants
+			// skipped for conflicts. Nothing local contradicts the stack and
+			// there is nothing to append, so leave it alone instead of
+			// tearing down PRs the user did not ask about.
+			plans[gi] = nativeStackPlan{keep: stacks[0]}
+			continue
+		}
+		for _, st := range stacks {
+			if err := dissolveStack(client, st.Number, w); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return plans, nil
+}
+
+// dissolveStack unstacks a GitHub stack, failing with an actionable error
+// when some PRs cannot be removed (merge-queued or auto-merge enabled).
+func dissolveStack(client gh.Service, number int, w io.Writer) error {
+	dissolved, err := client.Unstack(number)
+	if err != nil {
+		return fmt.Errorf("dissolving GitHub stack #%d: %w", number, err)
+	}
+	if !dissolved {
+		return fmt.Errorf("GitHub stack #%d could not be fully dissolved — some PRs are queued for merge or have auto-merge enabled; remove them from the queue and re-run", number)
+	}
+	_, _ = fmt.Fprintf(w, "Dissolved GitHub stack #%d (stack changed shape — it will be recreated)\n", number)
+	return nil
+}
+
+// finalizeNativeStacks creates or extends the native GitHub stack for each
+// group, once every PR exists with a chained base. Groups with a single PR
+// get no stack (GitHub requires at least two).
+func finalizeNativeStacks(client gh.Service, groups [][]*changeState, plans []nativeStackPlan, w io.Writer) error {
+	for gi, group := range groups {
+		chain := make([]int, len(group))
+		for i, s := range group {
+			chain[i] = s.pr.Number
+		}
+
+		plan := plans[gi]
+		if plan.keep != nil {
+			_, _ = fmt.Fprintf(w, "GitHub stack #%d: unchanged (it extends above the changes sent)\n", plan.keep.Number)
+			continue
+		}
+		if plan.appendTo != nil {
+			delta := chain[plan.prefixLen:]
+			if len(delta) == 0 {
+				_, _ = fmt.Fprintf(w, "GitHub stack #%d: up to date\n", plan.appendTo.Number)
+				continue
+			}
+			_, addErr := client.AddToStack(plan.appendTo.Number, delta)
+			if addErr == nil {
+				_, _ = fmt.Fprintf(w, "GitHub stack #%d: added %d PR(s)\n", plan.appendTo.Number, len(delta))
+				continue
+			}
+			// The append-only API rejects states we cannot always predict
+			// (e.g. after a partial merge) — recreate the stack instead.
+			_, _ = fmt.Fprintf(w, "warning: could not extend GitHub stack #%d (%v) — recreating it\n", plan.appendTo.Number, addErr)
+			if err := dissolveStack(client, plan.appendTo.Number, w); err != nil {
+				return err
+			}
+		}
+
+		if len(chain) < 2 {
+			continue
+		}
+		st, err := client.CreateStack(chain)
+		if err != nil {
+			return fmt.Errorf("creating GitHub stack: %w", err)
+		}
+		_, _ = fmt.Fprintf(w, "GitHub stack #%d: linked %d PR(s)\n", st.Number, len(chain))
+	}
+	return nil
 }
 
 // extractPushError extracts a clean reason from a jj git push error.

@@ -21,6 +21,13 @@ type Service interface {
 	LookupPRsByBranch(branches []string) (map[string]*PRInfo, error)
 	Owner() string
 	Repo() string
+
+	// Native GitHub stacked-PRs (private preview) operations.
+	StacksEnabled() (bool, error)
+	FindStackForPR(number int) (*Stack, error)
+	CreateStack(prNumbers []int) (*Stack, error)
+	AddToStack(stackNumber int, prNumbers []int) (*Stack, error)
+	Unstack(stackNumber int) (dissolved bool, err error)
 }
 
 // Client wraps go-github for PR mutations and GraphQL queries.

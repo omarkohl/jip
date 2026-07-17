@@ -147,10 +147,10 @@ jj new release main -m "chore: merge main into release"
 jj new
 
 # Send as a single PR (all 35 commits bundled, not stacked)
-jip s --base release --no-stack
+jip s --base release --stack=none
 ```
 
-The `--no-stack` flag tells jip to send a single PR for the tip of the stack
+`--stack=none` tells jip to send a single PR for the tip of the stack
 rather than one PR per commit. The reviewer sees one PR with the full diff from
 `release` to `main`.
 

@@ -26,6 +26,9 @@ request. When you update a PR, jip posts a comment showing what you changed
 - **Supports forks** — works both for repositories where you have write access as well as forked ones
 - **Normal GitHub merge** — no special "land" command, just merge PRs as usual
 - **Stacks may contain merge commits** — supports non-linear revision graphs
+- **Optional GitHub native stacked PRs** — with `--stack=gh-native`, jip links
+  PRs into GitHub's built-in stacks (private preview) instead of rendering
+  stack navigation into descriptions ([details](docs/reference.md#stacking-modes---stack))
 
 ## Installation
 
