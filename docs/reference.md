@@ -38,14 +38,23 @@ Global flags:
 ## Configuration files
 
 Workflow preferences can be set persistently instead of being passed as flags
-on every invocation. jip reads two TOML files:
+on every invocation. jip reads two TOML files, each of which may have a
+`.local.` sibling holding machine-specific overrides you don't want to share:
 
 1. **Global** — `~/.config/jip/config.toml` (the platform's user config dir,
-   e.g. `$XDG_CONFIG_HOME/jip/config.toml`)
+   e.g. `$XDG_CONFIG_HOME/jip/config.toml`), then
+   `~/.config/jip/config.local.toml`
 2. **Repo** — `.jip.toml` in the repository root (commit it to share team
-   defaults)
+   defaults), then `.jip.local.toml`
 
-Repo values override global values; CLI flags override both.
+Later files override earlier files; CLI flags override all config values. So a
+more specific location always wins, and a `.local.` file overrides its own
+sibling.
+
+The `.local.` files are for settings that shouldn't be shared: personal
+overrides alongside a `config.toml` tracked in your dotfiles, or a deviation
+from a team default without dirtying the committed `.jip.toml`. **Add
+`.jip.local.toml` to your `.gitignore`** — jip does not do this for you.
 
 Keys mirror the `send` flag names: `base`, `remote`, `upstream`, `draft`,
 `no-stack`, `rebase`, `diff-since-jip`, `reviewer`, `no-change-comment`.
@@ -58,10 +67,20 @@ diff-since-jip = true
 ```
 
 ```toml
+# ~/.config/jip/config.local.toml — machine-specific overrides
+upstream = "git@github.com:my-fork/project.git"
+```
+
+```toml
 # .jip.toml (repo root) — team defaults
 base = "dev"
 draft = true
 reviewer = ["alice", "team/backend"]
+```
+
+```toml
+# .jip.local.toml (repo root, gitignored) — your overrides for this repo
+draft = false
 ```
 
 ## Revsets

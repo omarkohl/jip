@@ -1,15 +1,22 @@
 // Package config loads jip's persistent preferences from TOML config files.
 //
-// Two locations are consulted, in order:
-//  1. Global: <user config dir>/jip/config.toml (e.g. ~/.config/jip/config.toml)
-//  2. Repo:   .jip.toml in the repository root
+// Two locations are consulted, and each may carry a .local. sibling holding
+// machine-specific overrides that should not be shared:
 //
-// Repo values override global values. CLI flags override both (enforced by
-// the caller, which only applies config to flags not set on the command line).
+//  1. Global: <user config dir>/jip/config.toml (e.g. ~/.config/jip/config.toml)
+//     then   <user config dir>/jip/config.local.toml
+//  2. Repo:   .jip.toml in the repository root
+//     then   .jip.local.toml (gitignore this)
+//
+// Later values override earlier values, so a more specific location always
+// wins and a .local. file overrides its own sibling. CLI flags override all
+// config values (enforced by the caller, which only applies config to flags
+// not set on the command line).
 package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,33 +42,39 @@ func GlobalPath() (string, error) {
 	return filepath.Join(dir, "jip", "config.toml"), nil
 }
 
-// Load reads the global and repo config files and returns a merged key→value
-// map with repo values taking precedence. Values are normalized to strings
-// ready to be applied to command-line flags (arrays are joined with commas).
-// Missing files are not an error; repoRoot may be empty to skip the repo file.
+// localSibling returns the machine-local override that sits next to path,
+// inserting ".local" before the extension: config.toml → config.local.toml,
+// .jip.toml → .jip.local.toml.
+func localSibling(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + ".local" + ext
+}
+
+// Load reads the config files and returns a merged key→value map, with later
+// files taking precedence. Values are normalized to strings ready to be
+// applied to command-line flags (arrays are joined with commas). Missing files
+// are not an error; repoRoot may be empty to skip the repo files.
 func Load(repoRoot string) (map[string]string, error) {
-	merged := make(map[string]string)
+	var bases []string
 
 	// The global config is an optional convenience: if its location can't be
 	// determined (e.g. os.UserConfigDir() fails because $HOME is unset),
 	// proceed as if there were no global config rather than aborting.
 	if globalPath, err := GlobalPath(); err == nil {
-		global, err := loadFile(globalPath)
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range global {
-			merged[k] = v
-		}
+		bases = append(bases, globalPath)
+	}
+	if repoRoot != "" {
+		bases = append(bases, filepath.Join(repoRoot, ".jip.toml"))
 	}
 
-	if repoRoot != "" {
-		repo, err := loadFile(filepath.Join(repoRoot, ".jip.toml"))
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range repo {
-			merged[k] = v
+	merged := make(map[string]string)
+	for _, base := range bases {
+		for _, path := range []string{base, localSibling(base)} {
+			cfg, err := loadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			maps.Copy(merged, cfg)
 		}
 	}
 	return merged, nil

@@ -26,6 +26,22 @@ func setGlobalConfig(t *testing.T, content string) {
 	}
 }
 
+// writeGlobalLocalConfig writes config.local.toml next to the global config.
+// It must be called after setGlobalConfig, which points Dir at a temp dir.
+func writeGlobalLocalConfig(t *testing.T, content string) {
+	t.Helper()
+	globalPath, err := GlobalPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(globalPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(localSibling(globalPath), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // writeRepoConfig creates a temp repo root containing a .jip.toml.
 func writeRepoConfig(t *testing.T, content string) string {
 	t.Helper()
@@ -34,6 +50,14 @@ func writeRepoConfig(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// writeRepoLocalConfig writes .jip.local.toml into an existing repo root.
+func writeRepoLocalConfig(t *testing.T, root, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, ".jip.local.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLoad_MissingFiles(t *testing.T) {
@@ -63,6 +87,64 @@ func TestLoad_RepoOverridesGlobal(t *testing.T) {
 	for k, v := range want {
 		if cfg[k] != v {
 			t.Errorf("cfg[%q] = %q, want %q", k, cfg[k], v)
+		}
+	}
+}
+
+func TestLoad_GlobalLocalOverridesGlobal(t *testing.T) {
+	setGlobalConfig(t, "base = \"main\"\ndraft = false\n")
+	writeGlobalLocalConfig(t, "base = \"dev\"\nrebase = true\n")
+	root := writeRepoConfig(t, "base = \"release\"\n")
+
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := map[string]string{
+		"base":   "release", // repo overrides global local
+		"draft":  "false",   // global only
+		"rebase": "true",    // global local only
+	}
+	for k, v := range want {
+		if cfg[k] != v {
+			t.Errorf("cfg[%q] = %q, want %q", k, cfg[k], v)
+		}
+	}
+}
+
+// TestLoad_Precedence pins the full layering: each location overrides the one
+// before it, and a .local. file overrides its own sibling.
+func TestLoad_Precedence(t *testing.T) {
+	setGlobalConfig(t, "base = \"a\"\nremote = \"a\"\nupstream = \"a\"\ndraft = true\n")
+	writeGlobalLocalConfig(t, "base = \"b\"\nremote = \"b\"\nupstream = \"b\"\n")
+	root := writeRepoConfig(t, "base = \"c\"\nremote = \"c\"\n")
+	writeRepoLocalConfig(t, root, "base = \"d\"\n")
+
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := map[string]string{
+		"base":     "d",    // repo local wins over all
+		"remote":   "c",    // repo wins over global local
+		"upstream": "b",    // global local wins over global
+		"draft":    "true", // global only
+	}
+	for k, v := range want {
+		if cfg[k] != v {
+			t.Errorf("cfg[%q] = %q, want %q", k, cfg[k], v)
+		}
+	}
+}
+
+func TestLocalSibling(t *testing.T) {
+	tests := []struct{ path, want string }{
+		{filepath.Join("cfg", "config.toml"), filepath.Join("cfg", "config.local.toml")},
+		{filepath.Join("repo", ".jip.toml"), filepath.Join("repo", ".jip.local.toml")},
+	}
+	for _, tt := range tests {
+		if got := localSibling(tt.path); got != tt.want {
+			t.Errorf("localSibling(%q) = %q, want %q", tt.path, got, tt.want)
 		}
 	}
 }
