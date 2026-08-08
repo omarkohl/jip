@@ -35,6 +35,11 @@ Global flags:
 | `--rebase` | | | Rebase the stack onto the base branch before sending |
 | `--diff-since-jip` | | | Diff against jip's own last send (recorded in the PR) instead of the current remote head |
 | `--no-change-comment` | | `default` | Comment posted when an updated PR has no code changes: `default`, `short`, or `none` |
+| `--no-draft` | | | Create PRs ready for review, ignoring a configured `draft` |
+| `--no-rebase` | | | Don't rebase before sending, ignoring a configured `rebase` |
+| `--no-diff-since-jip` | | | Diff against the current remote head, ignoring a configured `diff-since-jip` |
+| `--no-upstream` | | | Open PRs on the push remote, ignoring a configured `upstream` |
+| `--no-reviewer` | | | Don't request reviewers, ignoring a configured `reviewer` |
 
 ## Configuration files
 
@@ -60,7 +65,8 @@ from a team default without dirtying the committed `.jip.toml`. **Add
 Keys mirror the `send` flag names: `base`, `remote`, `upstream`, `draft`,
 `stack`, `no-stack`, `rebase`, `diff-since-jip`, `reviewer`,
 `no-change-comment`.
-Per-invocation flags (`--dry-run`, `--existing`) cannot be set from config.
+Per-invocation flags (`--dry-run`, `--existing`) and the `--no-` cancelling
+flags below cannot be set from config.
 
 ```toml
 # ~/.config/jip/config.toml — personal preferences
@@ -84,6 +90,33 @@ reviewer = ["alice", "team/backend"]
 # .jip.local.toml (repo root, gitignored) — your overrides for this repo
 draft = false
 ```
+
+### Overriding config for a single invocation
+
+Every configured value can be cancelled from the command line. Flags that carry
+a value are overridden by passing the value you want (`--base main`,
+`--stack default`, `--no-change-comment none`). The remaining flags have a
+`--no-` counterpart, since there is no value to pass:
+
+| Config key | Cancel with |
+|---|---|
+| `draft` | `--no-draft` |
+| `rebase` | `--no-rebase` |
+| `diff-since-jip` | `--no-diff-since-jip` |
+| `upstream` | `--no-upstream` |
+| `reviewer` | `--no-reviewer` |
+
+```bash
+# ~/.config/jip/config.toml sets rebase = true, but not this time
+jip send --no-rebase
+```
+
+A flag and its `--no-` counterpart cannot be combined.
+
+Two flags start with `no-` without being negations: `--no-change-comment` takes
+a value (`default`, `short` or `none`), and the deprecated `--no-stack` is an
+alias for `--stack=none`. Cancel a configured `stack` or `no-stack` by passing
+`--stack` with the mode you want.
 
 ## Revsets
 
