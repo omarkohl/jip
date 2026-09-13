@@ -48,6 +48,12 @@ func init() {
 	sendCmd.Flags().Bool("diff-since-jip", false, "Diff against jip's own last send (recorded in the PR) instead of the current remote head, so direct pushes by others don't distort the \"changes since\" comment")
 	sendCmd.Flags().String("no-change-comment", "default", "Comment posted when an updated PR has no code changes: default (formatted comment), short (one plain line), or none")
 
+	sendCmd.Flags().Bool("no-draft", false, "Create PRs ready for review, ignoring a configured draft")
+	sendCmd.Flags().Bool("no-rebase", false, "Don't rebase before sending, ignoring a configured rebase")
+	sendCmd.Flags().Bool("no-diff-since-jip", false, "Diff against the current remote head, ignoring a configured diff-since-jip")
+	sendCmd.Flags().Bool("no-upstream", false, "Open PRs on the push remote, ignoring a configured upstream")
+	sendCmd.Flags().Bool("no-reviewer", false, "Don't request reviewers, ignoring a configured reviewer")
+
 	_ = sendCmd.RegisterFlagCompletionFunc("base", completeJJBookmarks)
 	_ = sendCmd.RegisterFlagCompletionFunc("no-change-comment",
 		cobra.FixedCompletions([]string{"default", "short", "none"}, cobra.ShellCompDirectiveNoFileComp))
@@ -77,8 +83,50 @@ var sendConfigKeys = map[string]bool{
 	"no-change-comment": true,
 }
 
+// sendNegations maps a config key to the --no-<key> flag that cancels it on
+// the command line. A key gets one when its "off" state has no natural value
+// to type: a bool would need --key=false, a list or an optional string an
+// empty argument. Keys with a meaningful value to pass instead (base, remote,
+// stack, no-change-comment) don't need one.
+//
+// The deprecated --no-stack is not a negation of --stack (it is an alias for
+// --stack=none) and deliberately has no entry here.
+var sendNegations = map[string]string{
+	"draft":          "no-draft",
+	"rebase":         "no-rebase",
+	"diff-since-jip": "no-diff-since-jip",
+	"upstream":       "no-upstream",
+	"reviewer":       "no-reviewer",
+}
+
+// sendNegated reports whether key was cancelled on the command line via its
+// --no-<key> counterpart.
+func sendNegated(flags *pflag.FlagSet, key string) bool {
+	neg, ok := sendNegations[key]
+	if !ok {
+		return false
+	}
+	v, err := flags.GetBool(neg)
+	return err == nil && v
+}
+
+// checkSendNegations rejects a flag and its --no- counterpart given together,
+// which would leave the intent ambiguous.
+func checkSendNegations(flags *pflag.FlagSet) error {
+	for _, key := range slices.Sorted(maps.Keys(sendNegations)) {
+		if !sendNegated(flags, key) {
+			continue
+		}
+		if f := flags.Lookup(key); f != nil && f.Changed {
+			return fmt.Errorf("--%s and --%s cannot be combined", key, sendNegations[key])
+		}
+	}
+	return nil
+}
+
 // applySendConfig sets flag values from config files for flags that were not
-// given on the command line, so CLI flags always win.
+// given on the command line, so CLI flags always win. A --no-<key> on the
+// command line drops the configured value, leaving the flag at its default.
 func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
 	for _, key := range slices.Sorted(maps.Keys(cfg)) {
 		if !sendConfigKeys[key] {
@@ -86,7 +134,7 @@ func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
 				key, strings.Join(slices.Sorted(maps.Keys(sendConfigKeys)), ", "))
 		}
 		f := flags.Lookup(key)
-		if f.Changed {
+		if f.Changed || sendNegated(flags, key) {
 			continue
 		}
 		if err := flags.Set(key, cfg[key]); err != nil {
@@ -169,6 +217,9 @@ func runSend(cmd *cobra.Command, args []string) error {
 	noStackOnCLI := cmd.Flags().Changed("no-stack")
 	if stackOnCLI && noStackOnCLI {
 		return fmt.Errorf("--no-stack is deprecated and cannot be combined with --stack (use --stack=none)")
+	}
+	if err := checkSendNegations(cmd.Flags()); err != nil {
+		return err
 	}
 
 	// Apply config file values to flags not set on the command line.
