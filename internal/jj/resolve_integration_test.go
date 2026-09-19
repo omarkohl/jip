@@ -302,6 +302,9 @@ func initJJRepo(t *testing.T) string {
 func checkJJ(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("jj"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("jj not found in PATH; install jj in CI (see .github/actions/setup-jj)")
+		}
 		t.Skip("jj not found in PATH, skipping integration test")
 	}
 }
