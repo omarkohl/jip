@@ -7,21 +7,38 @@ import (
 )
 
 var (
-	httpsRe = regexp.MustCompile(`https?://[^/]+/([^/]+)/([^/.]+)`)
-	sshRe   = regexp.MustCompile(`[^@]+@[^:]+:([^/]+)/([^/.]+)`)
+	httpsRe = regexp.MustCompile(`https?://([^/]+)/([^/]+)/([^/.]+)`)
+	sshRe   = regexp.MustCompile(`[^@]+@([^:]+):([^/]+)/([^/.]+)`)
 )
 
-// ParseRepoFromURL extracts owner and repo name from a GitHub remote URL.
-// Supports both HTTPS and SSH formats.
-func ParseRepoFromURL(url string) (owner, repo string, err error) {
-	url = strings.TrimSpace(url)
-	url = strings.TrimSuffix(url, ".git")
+// ParseRepoFromURL extracts owner and repo name from a github.com remote URL.
+// Supports both HTTPS and SSH formats. Non-github.com hosts (including GitHub
+// Enterprise Server) are rejected — see https://github.com/omarkohl/jip/issues/49.
+func ParseRepoFromURL(raw string) (owner, repo string, err error) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimSuffix(raw, ".git")
 
-	if m := httpsRe.FindStringSubmatch(url); m != nil {
-		return m[1], m[2], nil
+	var host string
+	if m := httpsRe.FindStringSubmatch(raw); m != nil {
+		host, owner, repo = m[1], m[2], m[3]
+	} else if m := sshRe.FindStringSubmatch(raw); m != nil {
+		host, owner, repo = m[1], m[2], m[3]
+	} else {
+		return "", "", fmt.Errorf("cannot parse owner/repo from URL: %s", raw)
 	}
-	if m := sshRe.FindStringSubmatch(url); m != nil {
-		return m[1], m[2], nil
+	if err := requireGitHubHost(host); err != nil {
+		return "", "", err
 	}
-	return "", "", fmt.Errorf("cannot parse owner/repo from URL: %s", url)
+	return owner, repo, nil
+}
+
+func requireGitHubHost(host string) error {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	if host == "github.com" {
+		return nil
+	}
+	return fmt.Errorf("remote host %q is not supported; jip works with github.com only (see https://github.com/omarkohl/jip/issues/49)", host)
 }

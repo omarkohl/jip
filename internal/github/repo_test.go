@@ -1,6 +1,7 @@
 package github
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,27 @@ func TestParseRepoFromURL_Invalid(t *testing.T) {
 		_, _, err := ParseRepoFromURL(url)
 		if err == nil {
 			t.Errorf("ParseRepoFromURL(%q): expected error, got nil", url)
+		}
+	}
+}
+
+func TestParseRepoFromURL_RejectsNonGitHubHost(t *testing.T) {
+	urls := []string{
+		"https://ghes.corp/acme/app.git",
+		"https://github.example.com/acme/app",
+		"git@ghes.corp:acme/app.git",
+	}
+	for _, raw := range urls {
+		_, _, err := ParseRepoFromURL(raw)
+		if err == nil {
+			t.Errorf("ParseRepoFromURL(%q): expected error, got nil", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not supported") || !strings.Contains(err.Error(), "github.com only") {
+			t.Errorf("ParseRepoFromURL(%q): error %q should mention github.com only", raw, err)
+		}
+		if strings.Contains(err.Error(), "cannot parse") {
+			t.Errorf("ParseRepoFromURL(%q): should reject host, not fail to parse: %v", raw, err)
 		}
 	}
 }
