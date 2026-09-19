@@ -288,6 +288,40 @@ func TestIntegration_SendCreatesNewPRs(t *testing.T) {
 	}
 }
 
+// A freshly cut release branch shares its commit with main; --base release
+// must still target release.
+func TestIntegration_SendBaseSharedCommit(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	jjRun(t, repoDir, "bookmark", "set", "release", "-r", "main")
+	jjRun(t, repoDir, "git", "push", "--bookmark", "release")
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: release fix")
+
+	var buf bytes.Buffer
+	if err := executeSend(runner, mock, sendOpts{
+		base:    "release",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf); err != nil {
+		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(mock.prs))
+	}
+	for _, pr := range mock.prs {
+		if pr.BaseRefName != "release" {
+			t.Errorf("PR #%d base is %q, want \"release\"", pr.Number, pr.BaseRefName)
+		}
+	}
+}
+
 func TestIntegration_SendDryRun(t *testing.T) {
 	checkJJ(t)
 
