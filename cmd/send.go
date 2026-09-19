@@ -682,8 +682,26 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		return nil
 	}
 
+	// 7. gh-native: inspect the stacks the existing PRs belong to, and dissolve
+	// any that the append-only stacks API can no longer express (reorders,
+	// mid-stack inserts/removals, base changes) before any PR base is touched.
+	// Then detach PRs based on a change now above them: pushing would
+	// otherwise make that base branch contain the PR's head, and GitHub would
+	// mark the PR merged.
+	var stackPlans []nativeStackPlan
+	if opts.stackMode == stackModeNative && len(activeStates) > 0 {
+		groups := stackGroups(activeStates)
+		stackPlans, err = prepareNativeStacks(client, groups, baseBranch, w)
+		if err != nil {
+			return err
+		}
+		if err := detachStaleBases(client, groups, baseBranch); err != nil {
+			return err
+		}
+	}
+
 	if len(activeStates) > 0 {
-		// 7. Push bookmarks. Try batch first; on failure, push individually
+		// 8. Push bookmarks. Try batch first; on failure, push individually
 		// so that independent bookmarks can still proceed.
 		var pushBookmarks []string
 		for _, s := range activeStates {
@@ -728,40 +746,24 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 					}
 				}
 				activeStates = newActive
+				// The stack groups changed shape — plan again.
+				if opts.stackMode == stackModeNative && len(activeStates) > 0 {
+					stackPlans, err = prepareNativeStacks(client, stackGroups(activeStates), baseBranch, w)
+					if err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
 
 	if len(activeStates) > 0 {
-		// 8. Create/update PRs.
-		//
-		// In gh-native mode each PR targets the branch of the change below it
-		// (GitHub's stack API requires a valid base-to-head chain); otherwise
-		// every PR targets the base branch.
+		// 9. Create/update PRs.
 		groups := stackGroups(activeStates)
-		desiredBase := make(map[string]string, len(activeStates))
+		desiredBase := chainedBases(groups, baseBranch, opts.stackMode == stackModeNative)
 		activeBookmarks := make(map[string]bool, len(activeStates))
-		for _, group := range groups {
-			prev := baseBranch
-			for _, s := range group {
-				desiredBase[s.change.ChangeID] = prev
-				activeBookmarks[s.bookmark.Bookmark] = true
-				if opts.stackMode == stackModeNative {
-					prev = s.bookmark.Bookmark
-				}
-			}
-		}
-
-		// 8a. gh-native: inspect the stacks the existing PRs belong to, and
-		// dissolve any that the append-only stacks API can no longer express
-		// (reorders, mid-stack inserts/removals, base changes) before any PR
-		// base is touched.
-		var stackPlans []nativeStackPlan
-		if opts.stackMode == stackModeNative {
-			stackPlans, err = prepareNativeStacks(client, groups, baseBranch, w)
-			if err != nil {
-				return err
-			}
+		for _, s := range activeStates {
+			activeBookmarks[s.bookmark.Bookmark] = true
 		}
 
 		for i := range activeStates {
@@ -834,7 +836,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 8b. gh-native: link the PRs into native GitHub stacks now that every
+		// 9a. gh-native: link the PRs into native GitHub stacks now that every
 		// PR exists with a chained base.
 		if opts.stackMode == stackModeNative {
 			if err := finalizeNativeStacks(client, groups, stackPlans, w); err != nil {
@@ -842,7 +844,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 9. Update all PR bodies plus the invisible pushed-commit marker that
+		// 10. Update all PR bodies plus the invisible pushed-commit marker that
 		// records this push for a later --diff-since-jip. Stack navigation is
 		// rendered into the body only in default mode: with gh-native stacks
 		// GitHub's own UI shows the stack, and with --stack=none there is none.
@@ -874,7 +876,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			}
 		}
 
-		// 10. Print summary. PRs that ended up unchanged (branch already up to
+		// 11. Print summary. PRs that ended up unchanged (branch already up to
 		// date and body already correct) move to the Skipped section with reason
 		// up-to-date — nothing was actually done for them, so reporting them as
 		// "sent" would be noise.
@@ -1122,6 +1124,49 @@ func checkLinearStacks(states []changeState) error {
 		if childCount[id] > 1 {
 			return fmt.Errorf("--stack=gh-native requires linear stacks, but change %.12s (%s) has %d children in the stack — reshape the stack or use --stack=default",
 				id, s.change.Title(), childCount[id])
+		}
+	}
+	return nil
+}
+
+// chainedBases maps each change to the base its PR should target. When
+// chained (gh-native) each PR targets the branch of the change below it, as
+// GitHub's stack API requires a base-to-head chain; otherwise every PR
+// targets the base branch.
+func chainedBases(groups [][]*changeState, baseBranch string, chained bool) map[string]string {
+	bases := make(map[string]string)
+	for _, group := range groups {
+		prev := baseBranch
+		for _, s := range group {
+			bases[s.change.ChangeID] = prev
+			if chained {
+				prev = s.bookmark.Bookmark
+			}
+		}
+	}
+	return bases
+}
+
+// detachStaleBases retargets existing PRs onto the base branch before pushing
+// when their current base is the branch of a change now above them. After a
+// reorder the push would make that base contain the PR's head, which GitHub
+// treats as a merge and closes the PR. The base branch never contains
+// unmerged stack commits.
+func detachStaleBases(client gh.Service, groups [][]*changeState, baseBranch string) error {
+	for _, group := range groups {
+		above := make(map[string]bool, len(group))
+		for i := len(group) - 1; i >= 0; i-- {
+			s := group[i]
+			stale := s.pr != nil && above[s.pr.BaseRefName]
+			above[s.bookmark.Bookmark] = true
+			if !stale {
+				continue
+			}
+			if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Base: &baseBranch}); err != nil {
+				return fmt.Errorf("updating PR #%d base: %w", s.pr.Number, err)
+			}
+			s.pr.BaseRefName = baseBranch
+			s.changed = true
 		}
 	}
 	return nil
