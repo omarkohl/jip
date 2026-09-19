@@ -300,8 +300,9 @@ func runSend(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	apiURL := os.Getenv("GITHUB_API_URL")
-	client, err := gh.NewClient(token, upstreamURL, apiURL)
+	// github.com only: do not honor GITHUB_API_URL (GHES Actions sets it to
+	// the enterprise host, which would send a github.com token elsewhere).
+	client, err := gh.NewClient(token, upstreamURL, "")
 	if err != nil {
 		return err
 	}

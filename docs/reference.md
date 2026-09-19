@@ -271,6 +271,8 @@ jip uses the following authentication methods, in order:
 2. `gh` CLI authentication (if `gh` is installed and authenticated)
 3. Built-in OAuth device flow (`jip auth login`)
 
+jip supports github.com only. GitHub Enterprise Server is not supported; see issue #49. `GITHUB_API_URL` is ignored so a GHES Actions runner cannot send a github.com token to another host.
+
 ## Shell Completion
 
 Execute `jip completion --help` to learn how to generate different shell

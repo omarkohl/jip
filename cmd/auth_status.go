@@ -27,6 +27,7 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not authenticated. Run 'jip auth login' or 'gh auth login' or set GH_TOKEN")
 	}
 
+	// github.com only — GitHub Enterprise Server is not supported (#49).
 	client := github.NewClient(nil).WithAuthToken(token)
 	user, _, err := client.Users.Get(context.Background(), "")
 	if err != nil {
