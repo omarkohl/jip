@@ -380,3 +380,56 @@ func TestIntegration_CommitExists_BadRepo(t *testing.T) {
 		t.Error("CommitExists with bad repo dir: expected error, got nil")
 	}
 }
+
+func TestIntegration_ResolveBaseBranch_SharedCommit(t *testing.T) {
+	dir := initJJRepo(t)
+	runner := NewRunner(dir)
+	jjRun(t, dir, "bookmark", "set", "release", "-r", "main")
+
+	bookmarks, err := ParseBookmarkList(mustBookmarkList(t, runner))
+	if err != nil {
+		t.Fatalf("ParseBookmarkList: %v", err)
+	}
+
+	for _, base := range []string{"main", "release"} {
+		got, _, err := ResolveBaseBranch(runner, base, bookmarks, "origin")
+		if err != nil {
+			t.Fatalf("ResolveBaseBranch(%q): %v", base, err)
+		}
+		if got != base {
+			t.Errorf("ResolveBaseBranch(%q) = %q, want %q", base, got, base)
+		}
+	}
+
+	// An alias defined as a bookmark resolves to it, even though "main"
+	// sorts first among the bookmarks on the commit.
+	jjRun(t, dir, "config", "set", "--repo", `revset-aliases."trunk()"`, "release")
+	got, _, err := ResolveBaseBranch(runner, "trunk()", bookmarks, "origin")
+	if err != nil {
+		t.Fatalf("ResolveBaseBranch(trunk()): %v", err)
+	}
+	if got != "release" {
+		t.Errorf("ResolveBaseBranch(trunk()) = %q, want \"release\"", got)
+	}
+
+	// A non-literal revset matching both bookmarks reports all candidates.
+	got, candidates, err := ResolveBaseBranch(runner, "@-", bookmarks, "origin")
+	if err != nil {
+		t.Fatalf("ResolveBaseBranch(@-): %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Errorf("expected 2 candidates, got %v", candidates)
+	}
+	if got != "main" && got != "release" {
+		t.Errorf("ResolveBaseBranch(@-) = %q, want main or release", got)
+	}
+}
+
+func mustBookmarkList(t *testing.T, runner Runner) []byte {
+	t.Helper()
+	out, err := runner.BookmarkList()
+	if err != nil {
+		t.Fatalf("BookmarkList: %v", err)
+	}
+	return out
+}

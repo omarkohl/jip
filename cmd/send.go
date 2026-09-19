@@ -515,9 +515,13 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	if opts.upstreamRemote != "" {
 		baseRemote = opts.upstreamRemote
 	}
-	baseBranch, err := jj.ResolveBaseBranch(runner, opts.base, bookmarks, baseRemote)
+	baseBranch, baseCandidates, err := jj.ResolveBaseBranch(runner, opts.base, bookmarks, baseRemote)
 	if err != nil {
 		return err
+	}
+	if len(baseCandidates) > 1 {
+		_, _ = fmt.Fprintf(w, "Base %q matches bookmarks %s; using %q (pass --base <bookmark> to choose another)\n",
+			opts.base, strings.Join(baseCandidates, ", "), baseBranch)
 	}
 
 	// Build lookup: collect all remote branches, query GitHub for existing PRs.
