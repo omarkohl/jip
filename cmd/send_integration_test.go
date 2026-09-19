@@ -35,6 +35,28 @@ type mockService struct {
 	createStackCalls int
 	addToStackCalls  int
 	unstackCalls     int
+
+	// remoteDir, when set, makes the mock mimic GitHub marking a PR merged
+	// once its base branch on the remote contains its head.
+	remoteDir string
+}
+
+// autoMergeLocked marks open PRs as merged when the remote base branch
+// contains the head, as GitHub does. Caller must hold m.mu.
+func (m *mockService) autoMergeLocked() {
+	if m.remoteDir == "" {
+		return
+	}
+	for _, pr := range m.prs {
+		if pr.State != "OPEN" {
+			continue
+		}
+		cmd := exec.Command("git", "-C", m.remoteDir, "merge-base", "--is-ancestor",
+			"refs/heads/"+pr.HeadRefName, "refs/heads/"+pr.BaseRefName)
+		if cmd.Run() == nil {
+			pr.State = "MERGED"
+		}
+	}
 }
 
 func newMockService() *mockService {
@@ -79,8 +101,12 @@ func (m *mockService) CreatePR(head, base, title, body string, draft bool) (*gh.
 func (m *mockService) UpdatePR(number int, opts gh.UpdatePROpts) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.autoMergeLocked()
 	pr := m.prs[number]
 	if pr != nil {
+		if opts.Base != nil && pr.State != "OPEN" {
+			return fmt.Errorf("422 Validation Failed: Cannot change the base branch of a closed pull request")
+		}
 		if opts.Title != nil {
 			pr.Title = *opts.Title
 		}
@@ -111,6 +137,7 @@ func (m *mockService) RequestReviewers(number int, reviewers []string) error {
 func (m *mockService) LookupPRsByBranch(branches []string) (map[string]*gh.PRInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.autoMergeLocked()
 	result := make(map[string]*gh.PRInfo)
 	for _, branch := range branches {
 		for _, pr := range m.prs {
@@ -2639,6 +2666,60 @@ func TestIntegration_SendNativeStackInsertBelow(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Dissolved GitHub stack #1") {
 		t.Errorf("expected dissolve message in output, got:\n%s", buf.String())
+	}
+}
+
+func TestIntegration_SendNativeStackReorder(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	mock.stacksEnabled = true
+	repoDir, remoteDir := initTestRepoWithRemote(t)
+	mock.remoteDir = remoteDir
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: part one")
+	idBottom := getChangeID(t, repoDir, "@-")
+	writeAndCommit(t, repoDir, "b.go", "package b", "feat: part two")
+	idTop := getChangeID(t, repoDir, "@-")
+
+	var buf bytes.Buffer
+	opts := sendOpts{base: "main", remote: "origin", revsets: []string{"@-"}, stackMode: stackModeNative}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("first send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	// Swap the two changes. Pushing the old bottom on top of the old top
+	// makes the old bottom's branch contain the old top's head, so GitHub
+	// would mark the old top PR merged unless jip retargets it first.
+	jjRun(t, repoDir, "rebase", "-r", idBottom, "--insert-after", idTop)
+
+	buf.Reset()
+	opts.revsets = []string{idBottom}
+	if err := executeSend(runner, mock, opts, &buf); err != nil {
+		t.Fatalf("reorder send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+	t.Logf("Output:\n%s", buf.String())
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.prs) != 2 {
+		t.Errorf("expected the 2 existing PRs to be reused, got %d PRs", len(mock.prs))
+	}
+	for n, pr := range mock.prs {
+		if pr.State != "OPEN" {
+			t.Errorf("PR #%d state = %s, want OPEN", n, pr.State)
+		}
+	}
+	if nums := singleStackPRNumbers(t, mock); !slices.Equal(nums, []int{2, 1}) {
+		t.Errorf("stack PRs = %v, want [2 1]", nums)
+	}
+	if mock.prs[2].BaseRefName != "main" {
+		t.Errorf("new bottom PR base = %q, want main", mock.prs[2].BaseRefName)
+	}
+	if mock.prs[1].BaseRefName != mock.prs[2].HeadRefName {
+		t.Errorf("new top PR base = %q, want %q", mock.prs[1].BaseRefName, mock.prs[2].HeadRefName)
 	}
 }
 
