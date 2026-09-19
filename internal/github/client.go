@@ -42,8 +42,9 @@ type Client struct {
 // NewClient creates a GitHub client for the given repository.
 // remoteURL is the git remote URL (e.g. https://github.com/owner/repo.git),
 // from which owner and repo are parsed.
-// If apiURL is non-empty, it is used as the GitHub API base URL
-// (for GitHub Enterprise or testing).
+// If apiURL is non-empty, it is used as the GitHub API base URL.
+// That argument is a test seam only — production callers pass ""
+// (github.com). GitHub Enterprise Server is not supported.
 func NewClient(token, remoteURL, apiURL string) (*Client, error) {
 	owner, repo, err := ParseRepoFromURL(remoteURL)
 	if err != nil {
