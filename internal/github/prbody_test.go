@@ -405,8 +405,11 @@ func TestBuildDiffComment_DiffContainingCodeFences(t *testing.T) {
 
 func TestRangeDiffFooter_Empty(t *testing.T) {
 	result := rangeDiffFooter("", "main", "old", "new")
-	if result != "" {
-		t.Errorf("expected empty footer with no repo name, got %q", result)
+	if strings.Contains(result, "range-diff") {
+		t.Errorf("expected no range-diff hint with no repo name, got %q", result)
+	}
+	if !strings.Contains(result, "[jip](https://github.com/omarkohl/jip)") {
+		t.Errorf("expected jip link, got %q", result)
 	}
 }
 
@@ -420,5 +423,8 @@ func TestRangeDiffFooter_WithData(t *testing.T) {
 	}
 	if !strings.Contains(result, "jj interdiff -f old1234 -t new4567") {
 		t.Errorf("expected jj interdiff command, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[jip](https://github.com/omarkohl/jip)") {
+		t.Errorf("expected jip link, got:\n%s", result)
 	}
 }

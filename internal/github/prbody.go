@@ -247,10 +247,11 @@ func BuildUnavailableDiffComment(repoName, baseBranch, oldCommit, newCommit stri
 }
 
 // rangeDiffFooter builds a footer with a GitHub compare link and a local
-// range-diff command hint.
+// range-diff command hint, ending with a link to jip for context.
 func rangeDiffFooter(repoName, baseBranch, oldCommit, newCommit string) string {
+	const attribution = "Posted by [jip](https://github.com/omarkohl/jip)."
 	if oldCommit == "" || newCommit == "" || repoName == "" {
-		return ""
+		return "\n---\n<sub>" + attribution + "</sub>\n"
 	}
 	oldShort := oldCommit[:minInt(7, len(oldCommit))]
 	newShort := newCommit[:minInt(7, len(newCommit))]
@@ -261,8 +262,9 @@ func rangeDiffFooter(repoName, baseBranch, oldCommit, newCommit string) string {
 			"View the diff locally (will only work if you fetched the older commit at some point):\n"+
 			"`git range-diff %s %s %s`\n"+
 			"`jj interdiff -f %s -t %s`\n"+
+			"%s\n"+
 			"</sub>\n",
-		compareURL, baseBranch, oldShort, newShort, oldShort, newShort,
+		compareURL, baseBranch, oldShort, newShort, oldShort, newShort, attribution,
 	)
 }
 
