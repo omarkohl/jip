@@ -18,7 +18,7 @@ jj new main
 jj commit -m "fix: handle nil pointer in user lookup"
 
 # Send one PR against the upstream repo ("s" is an alias for "send")
-jip s --upstream upstream
+jip s --upstream
 ```
 
 That's it. jip creates a bookmark, pushes it to your fork, and opens a single
@@ -44,7 +44,7 @@ If the reviewer requests changes:
 jj squash
 
 # Update the PR (jip posts a comment showing what changed)
-jip s --upstream upstream
+jip s --upstream
 ```
 
 ---

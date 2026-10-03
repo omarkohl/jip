@@ -17,6 +17,42 @@ import (
 	"github.com/omarkohl/jip/internal/jj"
 )
 
+func TestIntegration_CheckUpstreamArgs(t *testing.T) {
+	checkJJ(t)
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+	jjRun(t, repoDir, "bookmark", "set", "fork", "-r", "@-")
+	remotes := map[string]string{"origin": "o", "upstream": "u", "fork": "f"}
+	for _, tc := range []struct {
+		cli     []string
+		wantErr bool
+	}{
+		{[]string{"--upstream", "@-"}, false},
+		{[]string{"--upstream", "fork"}, false},
+		{[]string{"fork", "--upstream"}, false},
+		{[]string{"--upstream=upstream", "fork"}, false},
+		{[]string{"--upstream", "--", "fork"}, false},
+		{[]string{"--upstream", "origin"}, true},
+		{[]string{"--upstream", "https://github.com/a/b.git"}, true},
+		{[]string{"--upstream", "git@github.com:a/b.git"}, true},
+		{[]string{"--upstream", "main@origin"}, false},
+		{[]string{"--upstream=fork", "origin"}, false},
+	} {
+		flags := newSendFlags()
+		if err := flags.Parse(tc.cli); err != nil {
+			t.Fatal(err)
+		}
+		upstream, _ := flags.GetString("upstream")
+		err := checkUpstreamArgs(runner, upstream, flags.Args(), remotes)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%v: err = %v, wantErr %v", tc.cli, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "--upstream=") {
+			t.Errorf("error not actionable: %v", err)
+		}
+	}
+}
+
 // mockService implements gh.Service with in-memory state.
 type mockService struct {
 	mu        sync.Mutex

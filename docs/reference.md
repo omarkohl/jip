@@ -27,7 +27,7 @@ Global flags:
 | `--remote` | | `origin` | Push remote name |
 | `--bookmark-policy` | | `auto` | `auto`: reuse eligible bookmarks and generate missing names; `require`: never generate names |
 | `--exclude-bookmarks` | | `normal_target.immutable()` | Boolean jj bookmark-template expression selecting bookmarks that must not be used |
-| `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened) |
+| `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened). Bare `--upstream` means the `upstream` remote; pass a value with `=` (`--upstream=fork`) |
 | `--dry-run` | `-n` | | Show what would happen without making changes |
 | `--reviewer` | `-r` | | Add reviewers (repeatable, comma-separated) |
 | `--draft` | `-d` | | Create PRs as drafts |
@@ -218,11 +218,14 @@ branches to your fork.
 ```bash
 # Assuming your fork is "origin" and you want to open a PR in the upstream project
 jj git remote add upstream https://github.com/some/project.git
-jip send --upstream upstream
+jip send --upstream   # bare flag defaults to the "upstream" remote
 
-# or without adding a remote
-jip send --upstream https://github.com/some/project.git
+# or another remote, or a URL without adding a remote (note the "=")
+jip send --upstream=https://github.com/some/project.git
 ```
+
+Arguments separated from `--upstream` by a space are revsets, not flag values.
+Use `=` to select another remote, even if a bookmark has the same name.
 
 ## Rebasing before send (`--rebase`)
 

@@ -298,3 +298,24 @@ func TestBookmarkConfig(t *testing.T) {
 		t.Fatalf("CLI policy = %q", got)
 	}
 }
+
+func TestUpstreamFlag_OptionalValue(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--upstream"}, "upstream"},
+		{[]string{"-u"}, "upstream"},
+		{[]string{"--upstream=fork"}, "fork"},
+		{[]string{"-u=https://github.com/a/b.git"}, "https://github.com/a/b.git"},
+		{nil, ""},
+	} {
+		flags := newSendFlags()
+		if err := flags.Parse(tc.args); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if got, _ := flags.GetString("upstream"); got != tc.want {
+			t.Errorf("%v: upstream = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
