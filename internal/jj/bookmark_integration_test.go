@@ -322,7 +322,7 @@ func TestIntegration_BookmarkCreation(t *testing.T) {
 	}
 
 	// EnsureBookmarks should create new bookmarks.
-	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin", nil, true)
+	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin", nil, nil, true)
 	if err != nil {
 		t.Fatalf("EnsureBookmarks: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestIntegration_BookmarkReuse(t *testing.T) {
 
 	// shouldUseExisting always returns true → reuse existing bookmark.
 	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin",
-		func(changeID, bookmark string) bool { return true }, true)
+		func(changeID, bookmark string) bool { return true }, nil, true)
 	if err != nil {
 		t.Fatalf("EnsureBookmarks: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestIntegration_BookmarkSelectiveReuse(t *testing.T) {
 	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin",
 		func(changeID, bookmark string) bool {
 			return strings.HasPrefix(bookmark, "jip/")
-		}, true)
+		}, nil, true)
 	if err != nil {
 		t.Fatalf("EnsureBookmarks: %v", err)
 	}
@@ -491,5 +491,37 @@ func TestIntegration_BookmarkMatchToChanges(t *testing.T) {
 	}
 	if bms := matched[changeB.ChangeID]; bms[0].Name != "branch-b" {
 		t.Errorf("expected change B matched to branch-b, got %s", bms[0].Name)
+	}
+}
+
+func TestIntegration_BookmarkPrefersExistingPR(t *testing.T) {
+	repoDir, _ := initJJRepoWithRemote(t)
+	runner := NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.txt", "aaa", "feat: multi bookmark")
+	jjRun(t, repoDir, "bookmark", "set", "jip/aaa/first", "-r", "@-")
+	jjRun(t, repoDir, "bookmark", "set", "zzz-with-pr", "-r", "@-")
+
+	dags, err := ResolveStacks(runner, []string{"@-"}, "main")
+	if err != nil {
+		t.Fatalf("ResolveStacks: %v", err)
+	}
+	data, err := runner.BookmarkList()
+	if err != nil {
+		t.Fatalf("BookmarkList: %v", err)
+	}
+	bookmarks, err := ParseBookmarkList(data)
+	if err != nil {
+		t.Fatalf("ParseBookmarkList: %v", err)
+	}
+
+	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin",
+		func(changeID, bookmark string) bool { return true },
+		func(bookmark string) bool { return bookmark == "zzz-with-pr" }, true)
+	if err != nil {
+		t.Fatalf("EnsureBookmarks: %v", err)
+	}
+	if len(results) != 1 || results[0].Bookmark != "zzz-with-pr" {
+		t.Fatalf("expected zzz-with-pr, got %+v", results)
 	}
 }
