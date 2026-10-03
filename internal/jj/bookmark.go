@@ -2,9 +2,11 @@ package jj
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -191,33 +193,43 @@ func MatchBookmarksToChanges(dag *ChangeDAG, bookmarks []BookmarkInfo) map[strin
 type ChangeBookmark struct {
 	ChangeID  string
 	Bookmark  string
-	IsNew     bool      // bookmark was created (not pre-existing)
+	IsNew     bool      // bookmark must be created (not pre-existing)
 	SyncState SyncState // sync state relative to the push remote
 	Conflict  bool      // bookmark has conflicting targets (true divergence)
 	Displaced bool      // bookmark exists but no longer points to this change's commit
+	Others    []string  // other usable bookmarks on the change that were not chosen, best first
 }
 
-// EnsureBookmarks assigns a bookmark to each change in the DAG. For changes
-// that already have a matching bookmark, it is reused (subject to the
-// shouldUseExisting callback). For changes without a bookmark, a new one is
-// created using the jip naming convention.
-//
-// shouldUseExisting is called for each existing bookmark on a change and returns
-// true if that bookmark should be used for the PR. This is the extension point
-// for GitHub API integration (e.g., checking if a PR already exists for that branch).
-// If nil, all existing bookmarks are accepted.
-//
-// When a change has several acceptable bookmarks, one for which prefer returns
-// true (e.g. it already has a PR) wins; otherwise the first acceptable one is
-// used. prefer may be nil.
-func EnsureBookmarks(
-	runner Runner,
+// sortByPriority orders bookmarks best first: higher priority, then
+// case-insensitive name, then exact name.
+func sortByPriority(bs []*BookmarkInfo, priority func(string) int) {
+	prio := func(b *BookmarkInfo) int {
+		if priority == nil {
+			return 0
+		}
+		return priority(b.Name)
+	}
+	slices.SortStableFunc(bs, func(x, y *BookmarkInfo) int {
+		if c := cmp.Compare(prio(y), prio(x)); c != 0 {
+			return c
+		}
+		if c := strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name)); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Name, y.Name)
+	})
+}
+
+// PlanBookmarks assigns bookmarks without changing the repository. A tie at
+// the highest priority is an error. All assignment errors are reported together.
+func PlanBookmarks(
 	dag *ChangeDAG,
 	bookmarks []BookmarkInfo,
 	pushRemote string,
 	shouldUseExisting func(changeID, bookmark string) bool,
-	prefer func(bookmark string) bool,
+	priority func(bookmark string) int,
 	createNew bool,
+	requireExisting bool,
 ) ([]ChangeBookmark, error) {
 	matched := MatchBookmarksToChanges(dag, bookmarks)
 
@@ -229,21 +241,32 @@ func EnsureBookmarks(
 	}
 
 	var result []ChangeBookmark
+	var problems []string
 	for _, change := range dag.Changes {
 		existing := matched[change.ChangeID]
 
-		// Try to find a usable existing bookmark.
-		var chosen *BookmarkInfo
+		// Pick a usable existing bookmark.
+		var usable []*BookmarkInfo
 		for _, b := range existing {
-			if shouldUseExisting != nil && !shouldUseExisting(change.ChangeID, b.Name) {
-				continue
+			if shouldUseExisting == nil || shouldUseExisting(change.ChangeID, b.Name) {
+				usable = append(usable, b)
 			}
-			if chosen == nil {
-				chosen = b
+		}
+		sortByPriority(usable, priority)
+		if len(usable) > 1 && (priority == nil || priority(usable[0].Name) == priority(usable[1].Name)) {
+			var names []string
+			for _, b := range usable {
+				names = append(names, b.Name)
 			}
-			if prefer == nil || prefer(b.Name) {
-				chosen = b
-				break
+			problems = append(problems, fmt.Sprintf("%.12s (%s): ambiguous bookmarks: %s; select one with `jip send <bookmark>`", change.ChangeID, change.Title(), strings.Join(names, ", ")))
+			continue
+		}
+		var chosen *BookmarkInfo
+		var others []string
+		if len(usable) > 0 {
+			chosen = usable[0]
+			for _, b := range usable[1:] {
+				others = append(others, b.Name)
 			}
 		}
 
@@ -254,6 +277,7 @@ func EnsureBookmarks(
 				IsNew:     false,
 				SyncState: chosen.SyncWith(pushRemote),
 				Conflict:  chosen.Conflict,
+				Others:    others,
 			})
 			continue
 		}
@@ -268,6 +292,13 @@ func EnsureBookmarks(
 		name := GenerateBookmarkName(change.Description, shortID)
 
 		if bi, exists := bookmarkByName[name]; exists {
+			if shouldUseExisting != nil && !shouldUseExisting(change.ChangeID, name) {
+				if !createNew {
+					continue
+				}
+				problems = append(problems, fmt.Sprintf("%.12s (%s): generated bookmark %q is excluded; create an eligible bookmark", change.ChangeID, change.Title(), name))
+				continue
+			}
 			// Bookmark exists but points to a different commit than our change.
 			// This typically means a fetch fast-forwarded it to a remote commit.
 			result = append(result, ChangeBookmark{
@@ -285,8 +316,9 @@ func EnsureBookmarks(
 			continue
 		}
 
-		if err := runner.BookmarkSet(name, change.ChangeID); err != nil {
-			return nil, fmt.Errorf("creating bookmark for %s: %w", change.ChangeID, err)
+		if requireExisting {
+			problems = append(problems, fmt.Sprintf("%.12s (%s): no eligible bookmark; create one with `jj bookmark set <name> -r %s`", change.ChangeID, change.Title(), change.ChangeID))
+			continue
 		}
 		result = append(result, ChangeBookmark{
 			ChangeID:  change.ChangeID,
@@ -295,7 +327,27 @@ func EnsureBookmarks(
 			SyncState: SyncLocalOnly,
 		})
 	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("cannot assign bookmarks:\n  %s", strings.Join(problems, "\n  "))
+	}
 	return result, nil
+}
+
+// EnsureBookmarks is the plan-and-apply entry point for callers that do not
+// need a separate preflight phase.
+func EnsureBookmarks(runner Runner, dag *ChangeDAG, bookmarks []BookmarkInfo, pushRemote string, shouldUseExisting func(string, string) bool, priority func(string) int, createNew bool) ([]ChangeBookmark, error) {
+	plan, err := PlanBookmarks(dag, bookmarks, pushRemote, shouldUseExisting, priority, createNew, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range plan {
+		if b.IsNew {
+			if err := runner.BookmarkSet(b.Bookmark, b.ChangeID); err != nil {
+				return nil, fmt.Errorf("creating bookmark for %s: %w", b.ChangeID, err)
+			}
+		}
+	}
+	return plan, nil
 }
 
 // GenerateBookmarkName creates a bookmark name following the jip convention:

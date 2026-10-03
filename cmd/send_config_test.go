@@ -273,3 +273,28 @@ func TestSendConfigKeys_MatchFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestBookmarkConfig(t *testing.T) {
+	flags := newSendFlags()
+	if err := applySendConfig(flags, map[string]string{
+		"bookmark-policy":   "require",
+		"exclude-bookmarks": `normal_target.immutable() || name.starts_with("release/")`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := flags.GetString("bookmark-policy"); got != "require" {
+		t.Fatalf("policy = %q", got)
+	}
+	if got, _ := flags.GetString("exclude-bookmarks"); !strings.Contains(got, "release/") {
+		t.Fatalf("exclusion = %q", got)
+	}
+	if err := flags.Set("bookmark-policy", "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySendConfig(flags, map[string]string{"bookmark-policy": "require"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := flags.GetString("bookmark-policy"); got != "auto" {
+		t.Fatalf("CLI policy = %q", got)
+	}
+}

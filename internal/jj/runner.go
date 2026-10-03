@@ -1,7 +1,9 @@
 package jj
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,6 +46,9 @@ type Runner interface {
 
 	// BookmarkList runs jj bookmark list --all-remotes and returns raw JSONL output.
 	BookmarkList() ([]byte, error)
+
+	// ExcludedBookmarks evaluates a boolean jj bookmark-template expression.
+	ExcludedBookmarks(expression string) (map[string]bool, error)
 
 	// BookmarkSet creates or moves a bookmark to the given revision.
 	BookmarkSet(name, rev string) error
@@ -167,6 +172,29 @@ func (r *realRunner) BookmarkSet(name, rev string) error {
 	}
 	slog.Debug("jj exec ok", "bytes", len(out))
 	return nil
+}
+
+func (r *realRunner) ExcludedBookmarks(expression string) (map[string]bool, error) {
+	template := `if(present && !conflict && (` + expression + `), json(name) ++ "\n")`
+	args := []string{"bookmark", "list", "--quiet", "-R", r.repoDir, "-T", template}
+	logCmd("jj", args)
+	cmd := exec.Command("jj", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("evaluating exclude-bookmarks: %w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	result := make(map[string]bool)
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for dec.More() {
+		var name string
+		if err := dec.Decode(&name); err != nil {
+			return nil, fmt.Errorf("parsing excluded bookmark: %w", err)
+		}
+		result[name] = true
+	}
+	return result, nil
 }
 
 func (r *realRunner) GitRemoteList() ([]byte, error) {

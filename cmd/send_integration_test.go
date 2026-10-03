@@ -2944,3 +2944,88 @@ func TestIntegration_SendNativeStackCrossFork(t *testing.T) {
 		t.Errorf("error should mention forks, got: %v", err)
 	}
 }
+
+// Several PR bookmarks require an explicit choice.
+func TestIntegration_SendSeveralPRBookmarks(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: initial feature")
+	for _, b := range []string{"beta", "alpha"} {
+		jjRun(t, repoDir, "bookmark", "set", b, "-r", "@-")
+		jjRun(t, repoDir, "git", "push", "--bookmark", b)
+		if _, err := mock.CreatePR(b, "main", "feat: initial feature", "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		revset, want string
+	}{
+		{"beta", "beta"},
+		{"beta@origin", "beta"},
+	} {
+		var buf bytes.Buffer
+		if err := executeSend(runner, mock, sendOpts{
+			base:    "main",
+			remote:  "origin",
+			revsets: []string{tc.revset},
+		}, &buf); err != nil {
+			t.Fatalf("send %s failed: %v\nOutput:\n%s", tc.revset, err, buf.String())
+		}
+		out := buf.String()
+		if !strings.Contains(out, "PRs on other bookmarks") || !strings.Contains(out, fmt.Sprintf("using %q", tc.want)) {
+			t.Errorf("send %s: expected warning choosing %q, got:\n%s", tc.revset, tc.want, out)
+		}
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 2 {
+		t.Errorf("expected no new PRs, got %d", len(mock.prs))
+	}
+}
+
+// Naming a bookmark without a PR must select it and report any PRs left alone.
+func TestIntegration_SendNamedBookmarkWithoutPR(t *testing.T) {
+	for _, name := range []string{"custom-feature", "jip/custom-feature"} {
+		t.Run(name, func(t *testing.T) {
+			checkJJ(t)
+			mock := newMockService()
+			repoDir, _ := initTestRepoWithRemote(t)
+			runner := jj.NewRunner(repoDir)
+
+			writeAndCommit(t, repoDir, "a.go", "package a", "feat: initial feature")
+			jjRun(t, repoDir, "bookmark", "set", "existing-pr", name, "jip/unused", "-r", "@-")
+			jjRun(t, repoDir, "git", "push", "--bookmark", "existing-pr")
+			oldPR, err := mock.CreatePR("existing-pr", "main", "old title", "old body", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var buf bytes.Buffer
+			if err := executeSend(runner, mock, sendOpts{
+				base: "main", remote: "origin", revsets: []string{name},
+			}, &buf); err != nil {
+				t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+			}
+
+			mock.mu.Lock()
+			defer mock.mu.Unlock()
+			if len(mock.prs) != 2 || mock.prs[2].HeadRefName != name {
+				t.Errorf("expected a new PR for %q, got %+v\nOutput:\n%s", name, mock.prs, buf.String())
+			}
+			if oldPR.Title != "old title" || oldPR.Body != "old body" || len(mock.comments[oldPR.Number]) != 0 {
+				t.Error("the other bookmark's PR was modified")
+			}
+			for _, want := range []string{fmt.Sprintf("using %q", name), "existing-pr", "left untouched"} {
+				if !strings.Contains(buf.String(), want) {
+					t.Errorf("expected warning containing %q, got:\n%s", want, buf.String())
+				}
+			}
+		})
+	}
+}

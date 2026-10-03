@@ -263,6 +263,26 @@ jip send --existing
 
 ## FAQ
 
+### How do I use a project's required PR branch names?
+
+Create one bookmark per change, then send the stack tip:
+
+```bash
+jj bookmark set feature/TASK-123-model -r <model-change>
+jj bookmark set feature/TASK-123-api -r <api-change>
+jip send feature/TASK-123-api
+```
+
+jip reuses the model bookmark for the ancestor and the API bookmark for the tip.
+To prohibit generated names, set `bookmark-policy = "require"` in `.jip.toml`.
+Existing `jip/` names remain valid. Preview all actions with
+`jip send --dry-run --no-rebase feature/TASK-123-api`.
+
+You can also name bookmarks from several stacks in one invocation. The commit
+graph defines the stacks, not the argument order. If a change has several
+eligible bookmarks and no unique existing PR, name the intended bookmark
+explicitly; jip will not guess.
+
 ### How do I update a commit in the middle of a stack?
 
 Create a new working copy on top of the commit you want to change, make your

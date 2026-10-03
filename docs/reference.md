@@ -25,6 +25,8 @@ Global flags:
 |---|---|---|---|
 | `--base` | `-b` | `trunk()` | Base branch (defaults to the repo's trunk branch, usually `main`) |
 | `--remote` | | `origin` | Push remote name |
+| `--bookmark-policy` | | `auto` | `auto`: reuse eligible bookmarks and generate missing names; `require`: never generate names |
+| `--exclude-bookmarks` | | `normal_target.immutable()` | Boolean jj bookmark-template expression selecting bookmarks that must not be used |
 | `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened) |
 | `--dry-run` | `-n` | | Show what would happen without making changes |
 | `--reviewer` | `-r` | | Add reviewers (repeatable, comma-separated) |
@@ -63,6 +65,7 @@ from a team default without dirtying the committed `.jip.toml`. **Add
 `.jip.local.toml` to your `.gitignore`** — jip does not do this for you.
 
 Keys mirror the `send` flag names: `base`, `remote`, `upstream`, `draft`,
+`bookmark-policy`, `exclude-bookmarks`,
 `stack`, `no-stack`, `rebase`, `diff-since-jip`, `reviewer`,
 `no-change-comment`.
 Per-invocation flags (`--dry-run`, `--existing`) and the `--no-` cancelling
@@ -144,6 +147,67 @@ jip send -b release/2026    # target a release branch
 
 The base must exist as a bookmark on the push/upstream remote — it's the
 branch your PRs target on GitHub.
+
+## Branch naming and bookmark selection
+
+Revsets select changes; bookmarks select their PR branches. Argument order does
+not define stack order: jip uses the commit graph, including multiple stacks.
+For each change, jip selects an eligible local bookmark in this order:
+
+1. A bookmark explicitly named in the command arguments.
+2. A bookmark with an open PR.
+3. Any other existing local bookmark.
+
+Several bookmarks at the winning priority are an error, not an alphabetical
+choice. Name exactly one bookmark for that change to resolve the ambiguity.
+Other open PRs on the change are reported and left untouched. Remote-only and
+conflicted bookmarks cannot be explicitly selected; remote-qualified selections
+must agree with the local target.
+
+If no bookmark exists, `auto` generates `jip/<description-slug>/<change-id>`.
+Projects that require developer-supplied names can prohibit generation:
+
+```toml
+# .jip.toml
+bookmark-policy = "require"
+```
+
+This does not validate names or reject existing `jip/` bookmarks. Missing and
+ambiguous assignments are reported together before bookmark creation, rebase,
+pushes, or PR changes. `--existing` still means existing **PRs** only; it skips
+changes without PRs rather than requiring bookmarks for them.
+
+The base bookmark is always excluded. By default, bookmarks targeting jj
+immutable commits are also excluded, following the repository's
+`immutable_heads()` alias. This is local jj policy, not GitHub branch protection.
+Replace the exclusion predicate using jj's **bookmark-template syntax**, not
+revset syntax. For example:
+
+```toml
+exclude-bookmarks = 'normal_target.immutable() || name.starts_with("release/")'
+# Or disable the configurable exclusion (the base is still excluded):
+# exclude-bookmarks = 'false'
+```
+
+Name predicates apply to individual bookmarks, even when an eligible feature
+bookmark shares a commit with an excluded release bookmark. Explicit selection
+does not bypass exclusions. Invalid expressions stop the send.
+
+### Read-only send plan
+
+`jip send --dry-run` runs the send logic without fetching, creating bookmarks,
+pushing, or modifying PRs. It prints generated bookmark names, push targets,
+new PR heads/bases/draft state, title/body updates, comments, reviewer requests,
+and native-stack operations. New PR and stack numbers use negative placeholders;
+links containing them will use the real numbers during a send.
+
+The plan uses current local and cached remote-tracking state. Remote changes,
+push checks, GitHub permissions, and merge-queue restrictions can affect an
+actual send. It does not promise that remote operations will succeed. jj reads
+can still snapshot working-copy files as usual.
+
+Dry-run rejects `--rebase`, including a configured rebase. Rebase with jj first,
+then use `jip send --dry-run --no-rebase` to preview the resulting stack.
 
 ## Fork-based workflow
 

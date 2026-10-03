@@ -36,6 +36,8 @@ func init() {
 	rootCmd.AddCommand(sendCmd)
 	sendCmd.Flags().StringP("base", "b", "trunk()", "Base branch (defaults to the repo's trunk branch, usually main)")
 	sendCmd.Flags().String("remote", "origin", "Push remote name")
+	sendCmd.Flags().String("bookmark-policy", "auto", "Bookmark naming: auto (generate missing names) or require (existing bookmarks only)")
+	sendCmd.Flags().String("exclude-bookmarks", defaultExcludeBookmarks, "Boolean jj bookmark-template expression for bookmarks that must not be used")
 	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (where PRs are opened)")
 	sendCmd.Flags().BoolP("dry-run", "n", false, "Show what would happen without making changes")
 	sendCmd.Flags().StringSliceP("reviewer", "r", nil, "Add reviewers (repeatable, comma-separated)")
@@ -63,14 +65,17 @@ func init() {
 
 // Stacking modes for the --stack flag.
 const (
-	stackModeDefault = "default"   // stack navigation rendered into PR descriptions
-	stackModeNative  = "gh-native" // GitHub's native stacked PRs (private preview)
-	stackModeNone    = "none"      // single PR per stack tip, no stacking
+	defaultExcludeBookmarks = "normal_target.immutable()"
+	stackModeDefault        = "default"   // stack navigation rendered into PR descriptions
+	stackModeNative         = "gh-native" // GitHub's native stacked PRs (private preview)
+	stackModeNone           = "none"      // single PR per stack tip, no stacking
 )
 
 // sendConfigKeys lists the send flags that may be set from config files.
 // Per-invocation flags (--dry-run, --existing) are deliberately excluded.
 var sendConfigKeys = map[string]bool{
+	"bookmark-policy":   true,
+	"exclude-bookmarks": true,
 	"base":              true,
 	"remote":            true,
 	"upstream":          true,
@@ -164,20 +169,22 @@ func resolveStackMode(stack string, stackSet, noStack, noStackOnCLI bool) (strin
 
 // sendOpts holds configuration for the send pipeline.
 type sendOpts struct {
-	base            string
-	remote          string
-	upstream        string // upstream remote URL (where PRs are opened); empty = same as remote
-	upstreamRemote  string // upstream as a named remote (for fetching); empty when upstream is a URL
-	pushOwner       string // owner parsed from push remote (for cross-fork head prefix)
-	dryRun          bool
-	draft           bool
-	existing        bool
-	stackMode       string // stackModeDefault (or ""), stackModeNative, or stackModeNone
-	rebase          bool
-	diffSinceJip    bool
-	noChangeComment string // "default" (or ""), "short", or "none"
-	reviewers       []string
-	revsets         []string
+	bookmarkPolicy   string
+	excludeBookmarks string
+	base             string
+	remote           string
+	upstream         string // upstream remote URL (where PRs are opened); empty = same as remote
+	upstreamRemote   string // upstream as a named remote (for fetching); empty when upstream is a URL
+	pushOwner        string // owner parsed from push remote (for cross-fork head prefix)
+	dryRun           bool
+	draft            bool
+	existing         bool
+	stackMode        string // stackModeDefault (or ""), stackModeNative, or stackModeNone
+	rebase           bool
+	diffSinceJip     bool
+	noChangeComment  string // "default" (or ""), "short", or "none"
+	reviewers        []string
+	revsets          []string
 }
 
 // skippedEntry records a change that was pre-skipped (before bookmark creation).
@@ -234,6 +241,8 @@ func runSend(cmd *cobra.Command, args []string) error {
 	base, _ := cmd.Flags().GetString("base")
 	remote, _ := cmd.Flags().GetString("remote")
 	upstream, _ := cmd.Flags().GetString("upstream")
+	bookmarkPolicy, _ := cmd.Flags().GetString("bookmark-policy")
+	excludeBookmarks, _ := cmd.Flags().GetString("exclude-bookmarks")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	reviewers, _ := cmd.Flags().GetStringSlice("reviewer")
 	// Trim whitespace from each reviewer (e.g. "-r alice, bob").
@@ -323,20 +332,22 @@ func runSend(cmd *cobra.Command, args []string) error {
 	}
 
 	return executeSend(runner, client, sendOpts{
-		base:            base,
-		remote:          remote,
-		upstream:        upstream,
-		upstreamRemote:  upstreamRemoteName,
-		pushOwner:       pushOwner,
-		dryRun:          dryRun,
-		draft:           draft,
-		existing:        existing,
-		stackMode:       stackMode,
-		rebase:          rebase,
-		diffSinceJip:    diffSinceJip,
-		noChangeComment: noChangeComment,
-		reviewers:       reviewers,
-		revsets:         revsets,
+		bookmarkPolicy:   bookmarkPolicy,
+		excludeBookmarks: excludeBookmarks,
+		base:             base,
+		remote:           remote,
+		upstream:         upstream,
+		upstreamRemote:   upstreamRemoteName,
+		pushOwner:        pushOwner,
+		dryRun:           dryRun,
+		draft:            draft,
+		existing:         existing,
+		stackMode:        stackMode,
+		rebase:           rebase,
+		diffSinceJip:     diffSinceJip,
+		noChangeComment:  noChangeComment,
+		reviewers:        reviewers,
+		revsets:          revsets,
 	}, w)
 }
 
@@ -363,6 +374,23 @@ func workspaceRunner() (jj.Runner, string, error) {
 // executeSend runs the core send algorithm: resolve stacks, ensure bookmarks,
 // push branches, and create/update PRs.
 func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer) error {
+	if opts.bookmarkPolicy == "" {
+		opts.bookmarkPolicy = "auto"
+	}
+	if opts.bookmarkPolicy != "auto" && opts.bookmarkPolicy != "require" {
+		return fmt.Errorf("invalid --bookmark-policy %q (use auto or require)", opts.bookmarkPolicy)
+	}
+	if opts.excludeBookmarks == "" {
+		opts.excludeBookmarks = defaultExcludeBookmarks
+	}
+	if opts.dryRun {
+		if opts.rebase {
+			return fmt.Errorf("--dry-run cannot predict a rebase: rebase with jj first, then run `jip send --dry-run --no-rebase`")
+		}
+		_, _ = fmt.Fprintln(w, "Dry run — using current local and remote-tracking state; no fetch, bookmark, push, or PR changes.")
+		runner = &previewRunner{Runner: runner, w: w}
+		client = newPreviewService(client, w)
+	}
 	if opts.stackMode == "" {
 		opts.stackMode = stackModeDefault
 	}
@@ -393,15 +421,13 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			return fmt.Errorf("fetching %s: %w", opts.upstreamRemote, err)
 		}
 	}
+	return executeFetchedSend(runner, client, opts, w, nil)
+}
 
-	// Rebase onto base branch if requested.
-	if opts.rebase {
-		_, _ = fmt.Fprintf(w, "Rebasing onto %s...\n", opts.base)
-		if err := runner.Rebase(opts.revsets, opts.base); err != nil {
-			return fmt.Errorf("rebasing onto %s: %w", opts.base, err)
-		}
-	}
-
+// executeFetchedSend can replan after a rebase without fetching again. Explicit
+// bookmark choices survive even when the original revsets no longer resolve to
+// the rewritten commits (commit hashes and remote bookmarks, for example).
+func executeFetchedSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer, named map[string]bool) error {
 	repoFullName := client.Owner() + "/" + client.Repo()
 
 	// 2. Resolve stacks.
@@ -509,6 +535,10 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	if err != nil {
 		return fmt.Errorf("parsing bookmarks: %w", err)
 	}
+	excluded, err := runner.ExcludedBookmarks(opts.excludeBookmarks)
+	if err != nil {
+		return err
+	}
 
 	// Resolve base revset to a concrete remote bookmark name for GitHub.
 	// GH's PR API needs a branch name; jj ops above can use the revset directly.
@@ -524,6 +554,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		_, _ = fmt.Fprintf(w, "Base %q matches bookmarks %s; using %q (pass --base <bookmark> to choose another)\n",
 			opts.base, strings.Join(baseCandidates, ", "), baseBranch)
 	}
+	excluded[baseBranch] = true
 
 	// Build lookup: collect all remote branches, query GitHub for existing PRs.
 	bookmarkByName := make(map[string]*jj.BookmarkInfo, len(bookmarks))
@@ -560,21 +591,46 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 	// 5. Process each DAG: ensure bookmarks.
 	var allStates []changeState
+	if named == nil {
+		named = jj.LiteralBookmarks(opts.revsets, bookmarks)
+	}
+	for name := range named {
+		if excluded[name] {
+			return fmt.Errorf("bookmark %q is excluded; select an eligible bookmark or change exclude-bookmarks", name)
+		}
+		bi := bookmarkByName[name]
+		if bi == nil || !bi.Present || bi.Conflict || bi.Target == "" {
+			return fmt.Errorf("bookmark %q has no unambiguous local target; create or resolve the local bookmark before sending", name)
+		}
+		for remote, rs := range bi.Remotes {
+			if slices.Contains(opts.revsets, name+"@"+remote) && rs.Target != bi.Target {
+				return fmt.Errorf("bookmark %q differs from %s@%s; select the local bookmark or reconcile the targets before sending", name, name, remote)
+			}
+		}
+	}
+	var assignmentErrors []string
 
 	for _, dag := range dags {
-		// Accept bookmarks that already have a PR or are jip/ bookmarks;
-		// among those, prefer one with a PR.
-		hasPR := func(bookmark string) bool {
-			_, ok := prMap[bookmark]
-			return ok
-		}
+		// All eligible local bookmarks may be reused. Explicit choices win,
+		// followed by an existing PR; ties require a user choice.
 		shouldUse := func(changeID, bookmark string) bool {
-			return hasPR(bookmark) || strings.HasPrefix(bookmark, "jip/")
+			return !excluded[bookmark] && (!opts.existing || prMap[bookmark] != nil || named[bookmark])
 		}
 
-		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, hasPR, !opts.existing)
+		priority := func(bookmark string) int {
+			switch {
+			case named[bookmark]:
+				return 2
+			case prMap[bookmark] != nil:
+				return 1
+			}
+			return 0
+		}
+
+		results, err := jj.PlanBookmarks(dag, bookmarks, opts.remote, shouldUse, priority, !opts.existing, opts.bookmarkPolicy == "require")
 		if err != nil {
-			return fmt.Errorf("ensuring bookmarks: %w", err)
+			assignmentErrors = append(assignmentErrors, err.Error())
+			continue
 		}
 
 		// Map change ID -> bookmark result.
@@ -585,6 +641,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 		for _, change := range dag.Changes {
 			bm := bmByChange[change.ChangeID]
+			warnOtherPRBookmarks(w, change, bm, prMap)
 			existingPR := prMap[bm.Bookmark]
 			allStates = append(allStates, changeState{
 				change:   change,
@@ -592,6 +649,9 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 				pr:       existingPR,
 			})
 		}
+	}
+	if len(assignmentErrors) > 0 {
+		return fmt.Errorf("%s", strings.Join(assignmentErrors, "\n"))
 	}
 
 	// Filter to existing PRs only when --existing is set.
@@ -662,31 +722,29 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 			return err
 		}
 	}
-
-	if opts.dryRun {
-		_, _ = fmt.Fprintf(w, "\nDry run — %d change(s) would be sent:\n\n", len(activeStates))
-		for _, s := range activeStates {
-			action := "CREATE"
-			if s.pr != nil {
-				action = fmt.Sprintf("UPDATE #%d", s.pr.Number)
-			}
-			bmStatus := "new"
-			if !s.bookmark.IsNew {
-				bmStatus = "existing"
-			}
-			_, _ = fmt.Fprintf(w, "  %s  %.12s  %s\n", action, s.change.ChangeID, s.change.Title())
-			_, _ = fmt.Fprintf(w, "         bookmark: %s (%s)\n", s.bookmark.Bookmark, bmStatus)
+	// Validate all assignments before rewriting the stack. Resolve and plan
+	// again afterwards because rebasing changes commit IDs and sync states.
+	if opts.rebase {
+		// Keep the selected change identities, not revision expressions that can
+		// select obsolete commits or a different graph after the rewrite.
+		data, err := runner.Log("(" + strings.Join(opts.revsets, " | ") + ")")
+		if err != nil {
+			return fmt.Errorf("resolving rebase selection: %w", err)
 		}
-		if opts.stackMode == stackModeNative && len(activeStates) > 1 {
-			_, _ = fmt.Fprintf(w, "\nPRs would be linked into native GitHub stack(s).\n")
+		selected, err := jj.ParseChanges(data)
+		if err != nil {
+			return fmt.Errorf("parsing rebase selection: %w", err)
 		}
-		if len(skippedStates) > 0 || len(preSkippedChanges) > 0 {
-			printAllSkipped(w, skippedStates, skippedIDs, preSkippedChanges)
+		_, _ = fmt.Fprintf(w, "Rebasing onto %s...\n", opts.base)
+		if err := runner.Rebase(opts.revsets, opts.base); err != nil {
+			return fmt.Errorf("rebasing onto %s: %w", opts.base, err)
 		}
-		if n := nonBenignSkips(skippedStates, skippedIDs, preSkippedChanges); n > 0 {
-			return fmt.Errorf("%d change(s) skipped", n)
+		opts.rebase = false
+		opts.revsets = make([]string, len(selected))
+		for i, change := range selected {
+			opts.revsets[i] = change.ChangeID
 		}
-		return nil
+		return executeFetchedSend(runner, client, opts, w, named)
 	}
 
 	// 7. gh-native: inspect the stacks the existing PRs belong to, and dissolve
@@ -708,6 +766,13 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	}
 
 	if len(activeStates) > 0 {
+		for _, s := range activeStates {
+			if s.bookmark.IsNew {
+				if err := runner.BookmarkSet(s.bookmark.Bookmark, s.change.ChangeID); err != nil {
+					return fmt.Errorf("creating bookmark: %w", err)
+				}
+			}
+		}
 		// 8. Push bookmarks. Try batch first; on failure, push individually
 		// so that independent bookmarks can still proceed.
 		var pushBookmarks []string
@@ -898,7 +963,11 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 		}
 
 		if len(sentStates) > 0 {
-			_, _ = fmt.Fprintf(w, "\n%d PR(s) sent:\n\n", len(sentStates))
+			verb := "sent"
+			if opts.dryRun {
+				verb = "would be sent"
+			}
+			_, _ = fmt.Fprintf(w, "\n%d PR(s) %s:\n\n", len(sentStates), verb)
 			for _, s := range sentStates {
 				action := "updated"
 				if s.isNew {
@@ -1378,4 +1447,20 @@ func printAllSkipped(w io.Writer, postSkipped []changeState, postReasons map[str
 		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		_, _ = fmt.Fprintf(w, "         %s\n", r.reason)
 	}
+}
+
+// warnOtherPRBookmarks notes when a change has PRs on bookmarks other than the
+// chosen one, since those PRs are left untouched.
+func warnOtherPRBookmarks(w io.Writer, change *jj.Change, bm jj.ChangeBookmark, prMap map[string]*gh.PRInfo) {
+	var others []string
+	for _, o := range bm.Others {
+		if prMap[o] != nil {
+			others = append(others, o)
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Change %q: using %q; PRs on other bookmarks (%s) are left untouched (name a bookmark, e.g. `jip send %s`, to choose another)\n",
+		change.Title(), bm.Bookmark, strings.Join(others, ", "), others[0])
 }
