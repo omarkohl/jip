@@ -2,9 +2,11 @@ package jj
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -195,6 +197,27 @@ type ChangeBookmark struct {
 	SyncState SyncState // sync state relative to the push remote
 	Conflict  bool      // bookmark has conflicting targets (true divergence)
 	Displaced bool      // bookmark exists but no longer points to this change's commit
+	Others    []string  // other usable bookmarks on the change that were not chosen, best first
+}
+
+// sortByPriority orders bookmarks best first: higher priority, then
+// case-insensitive name, then exact name.
+func sortByPriority(bs []*BookmarkInfo, priority func(string) int) {
+	prio := func(b *BookmarkInfo) int {
+		if priority == nil {
+			return 0
+		}
+		return priority(b.Name)
+	}
+	slices.SortStableFunc(bs, func(x, y *BookmarkInfo) int {
+		if c := cmp.Compare(prio(y), prio(x)); c != 0 {
+			return c
+		}
+		if c := strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name)); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Name, y.Name)
+	})
 }
 
 // EnsureBookmarks assigns a bookmark to each change in the DAG. For changes
@@ -206,12 +229,18 @@ type ChangeBookmark struct {
 // true if that bookmark should be used for the PR. This is the extension point
 // for GitHub API integration (e.g., checking if a PR already exists for that branch).
 // If nil, all existing bookmarks are accepted.
+//
+// When a change has several acceptable bookmarks, the one with the highest
+// priority wins; ties are broken by case-insensitive alphabetical order (then
+// by exact name), so the choice never depends on listing order. priority may
+// be nil, in which case all bookmarks tie.
 func EnsureBookmarks(
 	runner Runner,
 	dag *ChangeDAG,
 	bookmarks []BookmarkInfo,
 	pushRemote string,
 	shouldUseExisting func(changeID, bookmark string) bool,
+	priority func(bookmark string) int,
 	createNew bool,
 ) ([]ChangeBookmark, error) {
 	matched := MatchBookmarksToChanges(dag, bookmarks)
@@ -227,12 +256,20 @@ func EnsureBookmarks(
 	for _, change := range dag.Changes {
 		existing := matched[change.ChangeID]
 
-		// Try to find a usable existing bookmark.
-		var chosen *BookmarkInfo
+		// Pick a usable existing bookmark.
+		var usable []*BookmarkInfo
 		for _, b := range existing {
 			if shouldUseExisting == nil || shouldUseExisting(change.ChangeID, b.Name) {
-				chosen = b
-				break
+				usable = append(usable, b)
+			}
+		}
+		sortByPriority(usable, priority)
+		var chosen *BookmarkInfo
+		var others []string
+		if len(usable) > 0 {
+			chosen = usable[0]
+			for _, b := range usable[1:] {
+				others = append(others, b.Name)
 			}
 		}
 
@@ -243,6 +280,7 @@ func EnsureBookmarks(
 				IsNew:     false,
 				SyncState: chosen.SyncWith(pushRemote),
 				Conflict:  chosen.Conflict,
+				Others:    others,
 			})
 			continue
 		}

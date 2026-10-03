@@ -98,6 +98,18 @@ func literalBookmark(revset string, bookmarks []BookmarkInfo) (string, bool) {
 	return "", false
 }
 
+// LiteralBookmarks returns the set of bookmark names that are named literally
+// by one of the revsets ("name" or "name@remote").
+func LiteralBookmarks(revsets []string, bookmarks []BookmarkInfo) map[string]bool {
+	named := make(map[string]bool)
+	for _, r := range revsets {
+		if name, ok := literalBookmark(r, bookmarks); ok {
+			named[name] = true
+		}
+	}
+	return named
+}
+
 // ResolveStacks resolves one or more revsets against a base branch and returns
 // the changes organized into connected DAGs. Each DAG represents an independent
 // stack of changes between the base and the given revsets.
