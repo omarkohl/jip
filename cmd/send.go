@@ -36,7 +36,8 @@ func init() {
 	rootCmd.AddCommand(sendCmd)
 	sendCmd.Flags().StringP("base", "b", "trunk()", "Base branch (defaults to the repo's trunk branch, usually main)")
 	sendCmd.Flags().String("remote", "origin", "Push remote name")
-	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (where PRs are opened)")
+	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (where PRs are opened); bare --upstream means the \"upstream\" remote")
+	sendCmd.Flags().Lookup("upstream").NoOptDefVal = "upstream"
 	sendCmd.Flags().BoolP("dry-run", "n", false, "Show what would happen without making changes")
 	sendCmd.Flags().StringSliceP("reviewer", "r", nil, "Add reviewers (repeatable, comma-separated)")
 	sendCmd.Flags().BoolP("draft", "d", false, "Create PRs as drafts")
@@ -144,6 +145,21 @@ func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
 	return nil
 }
 
+// checkUpstreamArgs catches "--upstream <value>" written with a space. The
+// flag's value is optional, so pflag reads the value as a revset argument and
+// falls back to the "upstream" remote.
+func checkUpstreamArgs(upstream string, args []string, remotes map[string]string) error {
+	if upstream != "upstream" {
+		return nil
+	}
+	for _, a := range args {
+		if _, ok := remotes[a]; ok || strings.Contains(a, "://") || strings.HasPrefix(a, "git@") {
+			return fmt.Errorf("%q looks like an upstream, not a revset — use --upstream=%s", a, a)
+		}
+	}
+	return nil
+}
+
 // resolveStackMode reconciles the --stack flag with the deprecated --no-stack.
 // CLI flags beat config values: --no-stack on the command line overrides a
 // config-supplied stack key, while an explicit --stack overrides a
@@ -221,6 +237,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 	if err := checkSendNegations(cmd.Flags()); err != nil {
 		return err
 	}
+	upstreamOnCLI := cmd.Flags().Changed("upstream")
 
 	// Apply config file values to flags not set on the command line.
 	cfg, err := config.Load(repoRoot)
@@ -284,6 +301,11 @@ func runSend(cmd *cobra.Command, args []string) error {
 	remoteURL, ok := remotes[remote]
 	if !ok {
 		return fmt.Errorf("remote %q not found (available: %v)", remote, remotes)
+	}
+	if upstreamOnCLI {
+		if err := checkUpstreamArgs(upstream, args, remotes); err != nil {
+			return err
+		}
 	}
 
 	// Resolve upstream URL: if set, PRs target that repo; otherwise same as push remote.
