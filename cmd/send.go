@@ -562,15 +562,17 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 	var allStates []changeState
 
 	for _, dag := range dags {
-		// shouldUseExisting: prefer bookmarks that already have a PR, then any jip/ bookmark.
+		// Accept bookmarks that already have a PR or are jip/ bookmarks;
+		// among those, prefer one with a PR.
+		hasPR := func(bookmark string) bool {
+			_, ok := prMap[bookmark]
+			return ok
+		}
 		shouldUse := func(changeID, bookmark string) bool {
-			if _, hasPR := prMap[bookmark]; hasPR {
-				return true
-			}
-			return strings.HasPrefix(bookmark, "jip/")
+			return hasPR(bookmark) || strings.HasPrefix(bookmark, "jip/")
 		}
 
-		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, !opts.existing)
+		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, hasPR, !opts.existing)
 		if err != nil {
 			return fmt.Errorf("ensuring bookmarks: %w", err)
 		}

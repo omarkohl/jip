@@ -519,6 +519,39 @@ func TestIntegration_SendUpdatesExistingPRs(t *testing.T) {
 	}
 }
 
+// A change with both a jip/ bookmark and a bookmark backing an open PR must
+// reuse the PR's bookmark, even when the jip/ one is listed first.
+func TestIntegration_SendPrefersBookmarkWithPR(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: initial feature")
+	jjRun(t, repoDir, "bookmark", "set", "zzz-feature", "-r", "@-")
+	jjRun(t, repoDir, "git", "push", "--bookmark", "zzz-feature")
+	jjRun(t, repoDir, "bookmark", "set", "jip/aaa", "-r", "@-")
+	if _, err := mock.CreatePR("zzz-feature", "main", "feat: initial feature", "", false); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := executeSend(runner, mock, sendOpts{
+		base:    "main",
+		remote:  "origin",
+		revsets: []string{"@-"},
+	}, &buf); err != nil {
+		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 1 {
+		t.Errorf("expected existing PR to be reused, got %d PRs\nOutput:\n%s", len(mock.prs), buf.String())
+	}
+}
+
 func TestIntegration_SendDiamondDAG(t *testing.T) {
 	checkJJ(t)
 

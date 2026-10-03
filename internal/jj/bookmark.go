@@ -206,12 +206,17 @@ type ChangeBookmark struct {
 // true if that bookmark should be used for the PR. This is the extension point
 // for GitHub API integration (e.g., checking if a PR already exists for that branch).
 // If nil, all existing bookmarks are accepted.
+//
+// When a change has several acceptable bookmarks, one for which prefer returns
+// true (e.g. it already has a PR) wins; otherwise the first acceptable one is
+// used. prefer may be nil.
 func EnsureBookmarks(
 	runner Runner,
 	dag *ChangeDAG,
 	bookmarks []BookmarkInfo,
 	pushRemote string,
 	shouldUseExisting func(changeID, bookmark string) bool,
+	prefer func(bookmark string) bool,
 	createNew bool,
 ) ([]ChangeBookmark, error) {
 	matched := MatchBookmarksToChanges(dag, bookmarks)
@@ -230,7 +235,13 @@ func EnsureBookmarks(
 		// Try to find a usable existing bookmark.
 		var chosen *BookmarkInfo
 		for _, b := range existing {
-			if shouldUseExisting == nil || shouldUseExisting(change.ChangeID, b.Name) {
+			if shouldUseExisting != nil && !shouldUseExisting(change.ChangeID, b.Name) {
+				continue
+			}
+			if chosen == nil {
+				chosen = b
+			}
+			if prefer == nil || prefer(b.Name) {
 				chosen = b
 				break
 			}
