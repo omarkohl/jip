@@ -560,19 +560,27 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 	// 5. Process each DAG: ensure bookmarks.
 	var allStates []changeState
+	named := jj.LiteralBookmarks(opts.revsets, bookmarks)
 
 	for _, dag := range dags {
-		// Accept bookmarks that already have a PR or are jip/ bookmarks;
-		// among those, prefer one with a PR.
-		hasPR := func(bookmark string) bool {
-			_, ok := prMap[bookmark]
-			return ok
-		}
+		// Accept bookmarks that already have a PR or are jip/ bookmarks. If a
+		// change has several, prefer one named on the command line, then one
+		// with a PR, then alphabetical order.
 		shouldUse := func(changeID, bookmark string) bool {
-			return hasPR(bookmark) || strings.HasPrefix(bookmark, "jip/")
+			return prMap[bookmark] != nil || strings.HasPrefix(bookmark, "jip/")
 		}
 
-		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, hasPR, !opts.existing)
+		priority := func(bookmark string) int {
+			switch {
+			case named[bookmark]:
+				return 2
+			case prMap[bookmark] != nil:
+				return 1
+			}
+			return 0
+		}
+
+		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, priority, !opts.existing)
 		if err != nil {
 			return fmt.Errorf("ensuring bookmarks: %w", err)
 		}
@@ -585,6 +593,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 		for _, change := range dag.Changes {
 			bm := bmByChange[change.ChangeID]
+			warnOtherPRBookmarks(w, change, bm, prMap)
 			existingPR := prMap[bm.Bookmark]
 			allStates = append(allStates, changeState{
 				change:   change,
@@ -1378,4 +1387,23 @@ func printAllSkipped(w io.Writer, postSkipped []changeState, postReasons map[str
 		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		_, _ = fmt.Fprintf(w, "         %s\n", r.reason)
 	}
+}
+
+// warnOtherPRBookmarks notes when a change has PRs on bookmarks other than the
+// chosen one, since those PRs are left untouched.
+func warnOtherPRBookmarks(w io.Writer, change *jj.Change, bm jj.ChangeBookmark, prMap map[string]*gh.PRInfo) {
+	if prMap[bm.Bookmark] == nil {
+		return
+	}
+	var others []string
+	for _, o := range bm.Others {
+		if prMap[o] != nil {
+			others = append(others, o)
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Change %q has PRs on several bookmarks (%s); using %q (name a bookmark, e.g. `jip send %s`, to choose another)\n",
+		change.Title(), strings.Join(append([]string{bm.Bookmark}, others...), ", "), bm.Bookmark, others[0])
 }

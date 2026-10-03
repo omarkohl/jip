@@ -517,11 +517,48 @@ func TestIntegration_BookmarkPrefersExistingPR(t *testing.T) {
 
 	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin",
 		func(changeID, bookmark string) bool { return true },
-		func(bookmark string) bool { return bookmark == "zzz-with-pr" }, true)
+		func(bookmark string) int {
+			if bookmark == "zzz-with-pr" {
+				return 1
+			}
+			return 0
+		}, true)
 	if err != nil {
 		t.Fatalf("EnsureBookmarks: %v", err)
 	}
 	if len(results) != 1 || results[0].Bookmark != "zzz-with-pr" {
 		t.Fatalf("expected zzz-with-pr, got %+v", results)
+	}
+}
+
+func TestIntegration_BookmarkTieIsAlphabetical(t *testing.T) {
+	repoDir, _ := initJJRepoWithRemote(t)
+	runner := NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.txt", "aaa", "feat: tie")
+	jjRun(t, repoDir, "bookmark", "set", "banana", "Cherry", "apple", "-r", "@-")
+
+	dags, err := ResolveStacks(runner, []string{"@-"}, "main")
+	if err != nil {
+		t.Fatalf("ResolveStacks: %v", err)
+	}
+	data, err := runner.BookmarkList()
+	if err != nil {
+		t.Fatalf("BookmarkList: %v", err)
+	}
+	bookmarks, err := ParseBookmarkList(data)
+	if err != nil {
+		t.Fatalf("ParseBookmarkList: %v", err)
+	}
+
+	results, err := EnsureBookmarks(runner, dags[0], bookmarks, "origin", nil, nil, true)
+	if err != nil {
+		t.Fatalf("EnsureBookmarks: %v", err)
+	}
+	if len(results) != 1 || results[0].Bookmark != "apple" {
+		t.Fatalf("expected apple, got %+v", results)
+	}
+	if got := strings.Join(results[0].Others, ","); got != "banana,Cherry" {
+		t.Errorf("Others = %q, want banana,Cherry", got)
 	}
 }

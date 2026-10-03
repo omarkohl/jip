@@ -2944,3 +2944,48 @@ func TestIntegration_SendNativeStackCrossFork(t *testing.T) {
 		t.Errorf("error should mention forks, got: %v", err)
 	}
 }
+
+// A change with PRs on several bookmarks uses the alphabetically first one and
+// warns, unless a bookmark is named on the command line.
+func TestIntegration_SendSeveralPRBookmarks(t *testing.T) {
+	checkJJ(t)
+
+	mock := newMockService()
+	repoDir, _ := initTestRepoWithRemote(t)
+	runner := jj.NewRunner(repoDir)
+
+	writeAndCommit(t, repoDir, "a.go", "package a", "feat: initial feature")
+	for _, b := range []string{"beta", "alpha"} {
+		jjRun(t, repoDir, "bookmark", "set", b, "-r", "@-")
+		jjRun(t, repoDir, "git", "push", "--bookmark", b)
+		if _, err := mock.CreatePR(b, "main", "feat: initial feature", "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		revset, want string
+	}{
+		{"@-", "alpha"},
+		{"beta", "beta"},
+	} {
+		var buf bytes.Buffer
+		if err := executeSend(runner, mock, sendOpts{
+			base:    "main",
+			remote:  "origin",
+			revsets: []string{tc.revset},
+		}, &buf); err != nil {
+			t.Fatalf("send %s failed: %v\nOutput:\n%s", tc.revset, err, buf.String())
+		}
+		out := buf.String()
+		if !strings.Contains(out, "has PRs on several bookmarks") || !strings.Contains(out, fmt.Sprintf("using %q", tc.want)) {
+			t.Errorf("send %s: expected warning choosing %q, got:\n%s", tc.revset, tc.want, out)
+		}
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.prs) != 2 {
+		t.Errorf("expected no new PRs, got %d", len(mock.prs))
+	}
+}
