@@ -25,7 +25,7 @@ Global flags:
 |---|---|---|---|
 | `--base` | `-b` | `trunk()` | Base branch (defaults to the repo's trunk branch, usually `main`) |
 | `--remote` | | `origin` | Push remote name |
-| `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened) |
+| `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened). Bare `--upstream` means the `upstream` remote; pass a value with `=` (`--upstream=fork`) |
 | `--dry-run` | `-n` | | Show what would happen without making changes |
 | `--reviewer` | `-r` | | Add reviewers (repeatable, comma-separated) |
 | `--draft` | `-d` | | Create PRs as drafts |
@@ -154,10 +154,10 @@ branches to your fork.
 ```bash
 # Assuming your fork is "origin" and you want to open a PR in the upstream project
 jj git remote add upstream https://github.com/some/project.git
-jip send --upstream upstream
+jip send --upstream   # bare flag defaults to the "upstream" remote
 
-# or without adding a remote
-jip send --upstream https://github.com/some/project.git
+# or another remote, or a URL without adding a remote (note the "=")
+jip send --upstream=https://github.com/some/project.git
 ```
 
 ## Rebasing before send (`--rebase`)

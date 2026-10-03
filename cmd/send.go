@@ -36,7 +36,8 @@ func init() {
 	rootCmd.AddCommand(sendCmd)
 	sendCmd.Flags().StringP("base", "b", "trunk()", "Base branch (defaults to the repo's trunk branch, usually main)")
 	sendCmd.Flags().String("remote", "origin", "Push remote name")
-	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (where PRs are opened)")
+	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (where PRs are opened); bare --upstream means the \"upstream\" remote")
+	sendCmd.Flags().Lookup("upstream").NoOptDefVal = "upstream"
 	sendCmd.Flags().BoolP("dry-run", "n", false, "Show what would happen without making changes")
 	sendCmd.Flags().StringSliceP("reviewer", "r", nil, "Add reviewers (repeatable, comma-separated)")
 	sendCmd.Flags().BoolP("draft", "d", false, "Create PRs as drafts")
@@ -144,6 +145,21 @@ func applySendConfig(flags *pflag.FlagSet, cfg map[string]string) error {
 	return nil
 }
 
+// checkUpstreamArgs catches "--upstream <value>" written with a space. The
+// flag's value is optional, so pflag reads the value as a revset argument and
+// falls back to the "upstream" remote.
+func checkUpstreamArgs(upstream string, args []string, remotes map[string]string) error {
+	if upstream != "upstream" {
+		return nil
+	}
+	for _, a := range args {
+		if _, ok := remotes[a]; ok || strings.Contains(a, "://") || strings.HasPrefix(a, "git@") {
+			return fmt.Errorf("%q looks like an upstream, not a revset — use --upstream=%s", a, a)
+		}
+	}
+	return nil
+}
+
 // resolveStackMode reconciles the --stack flag with the deprecated --no-stack.
 // CLI flags beat config values: --no-stack on the command line overrides a
 // config-supplied stack key, while an explicit --stack overrides a
@@ -221,6 +237,7 @@ func runSend(cmd *cobra.Command, args []string) error {
 	if err := checkSendNegations(cmd.Flags()); err != nil {
 		return err
 	}
+	upstreamOnCLI := cmd.Flags().Changed("upstream")
 
 	// Apply config file values to flags not set on the command line.
 	cfg, err := config.Load(repoRoot)
@@ -284,6 +301,11 @@ func runSend(cmd *cobra.Command, args []string) error {
 	remoteURL, ok := remotes[remote]
 	if !ok {
 		return fmt.Errorf("remote %q not found (available: %v)", remote, remotes)
+	}
+	if upstreamOnCLI {
+		if err := checkUpstreamArgs(upstream, args, remotes); err != nil {
+			return err
+		}
 	}
 
 	// Resolve upstream URL: if set, PRs target that repo; otherwise same as push remote.
@@ -560,17 +582,27 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 	// 5. Process each DAG: ensure bookmarks.
 	var allStates []changeState
+	named := jj.LiteralBookmarks(opts.revsets, bookmarks)
 
 	for _, dag := range dags {
-		// shouldUseExisting: prefer bookmarks that already have a PR, then any jip/ bookmark.
+		// Accept bookmarks that already have a PR or are jip/ bookmarks. If a
+		// change has several, prefer one named on the command line, then one
+		// with a PR, then alphabetical order.
 		shouldUse := func(changeID, bookmark string) bool {
-			if _, hasPR := prMap[bookmark]; hasPR {
-				return true
-			}
-			return strings.HasPrefix(bookmark, "jip/")
+			return prMap[bookmark] != nil || strings.HasPrefix(bookmark, "jip/")
 		}
 
-		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, !opts.existing)
+		priority := func(bookmark string) int {
+			switch {
+			case named[bookmark]:
+				return 2
+			case prMap[bookmark] != nil:
+				return 1
+			}
+			return 0
+		}
+
+		results, err := jj.EnsureBookmarks(runner, dag, bookmarks, opts.remote, shouldUse, priority, !opts.existing)
 		if err != nil {
 			return fmt.Errorf("ensuring bookmarks: %w", err)
 		}
@@ -583,6 +615,7 @@ func executeSend(runner jj.Runner, client gh.Service, opts sendOpts, w io.Writer
 
 		for _, change := range dag.Changes {
 			bm := bmByChange[change.ChangeID]
+			warnOtherPRBookmarks(w, change, bm, prMap)
 			existingPR := prMap[bm.Bookmark]
 			allStates = append(allStates, changeState{
 				change:   change,
@@ -1376,4 +1409,23 @@ func printAllSkipped(w io.Writer, postSkipped []changeState, postReasons map[str
 		_, _ = fmt.Fprintf(w, "  %.12s  %s\n", s.change.ChangeID, s.change.Title())
 		_, _ = fmt.Fprintf(w, "         %s\n", r.reason)
 	}
+}
+
+// warnOtherPRBookmarks notes when a change has PRs on bookmarks other than the
+// chosen one, since those PRs are left untouched.
+func warnOtherPRBookmarks(w io.Writer, change *jj.Change, bm jj.ChangeBookmark, prMap map[string]*gh.PRInfo) {
+	if prMap[bm.Bookmark] == nil {
+		return
+	}
+	var others []string
+	for _, o := range bm.Others {
+		if prMap[o] != nil {
+			others = append(others, o)
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Change %q has PRs on several bookmarks (%s); using %q (name a bookmark, e.g. `jip send %s`, to choose another)\n",
+		change.Title(), strings.Join(append([]string{bm.Bookmark}, others...), ", "), bm.Bookmark, others[0])
 }

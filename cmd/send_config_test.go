@@ -273,3 +273,48 @@ func TestSendConfigKeys_MatchFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestUpstreamFlag_OptionalValue(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--upstream"}, "upstream"},
+		{[]string{"-u"}, "upstream"},
+		{[]string{"--upstream=fork"}, "fork"},
+		{[]string{"-u=https://github.com/a/b.git"}, "https://github.com/a/b.git"},
+		{nil, ""},
+	} {
+		flags := newSendFlags()
+		if err := flags.Parse(tc.args); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if got, _ := flags.GetString("upstream"); got != tc.want {
+			t.Errorf("%v: upstream = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestCheckUpstreamArgs(t *testing.T) {
+	remotes := map[string]string{"origin": "o", "upstream": "u", "fork": "f"}
+	for _, tc := range []struct {
+		upstream string
+		args     []string
+		wantErr  bool
+	}{
+		{"upstream", []string{"@-"}, false},
+		{"upstream", []string{"fork"}, true},
+		{"upstream", []string{"https://github.com/a/b.git"}, true},
+		{"upstream", []string{"git@github.com:a/b.git"}, true},
+		{"upstream", []string{"main@origin"}, false},
+		{"fork", []string{"origin"}, false},
+	} {
+		err := checkUpstreamArgs(tc.upstream, tc.args, remotes)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%q %v: err = %v, wantErr %v", tc.upstream, tc.args, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "--upstream=") {
+			t.Errorf("error not actionable: %v", err)
+		}
+	}
+}
