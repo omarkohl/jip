@@ -45,10 +45,19 @@ type previewService struct {
 	nextStack int
 	stacks    map[int]*gh.Stack
 	removed   map[int]bool
+	prs       map[int]*gh.PRInfo
 }
 
 func newPreviewService(service gh.Service, w io.Writer) *previewService {
-	return &previewService{Service: service, w: w, nextPR: -1, nextStack: -1, stacks: make(map[int]*gh.Stack), removed: make(map[int]bool)}
+	return &previewService{Service: service, w: w, nextPR: -1, nextStack: -1, stacks: make(map[int]*gh.Stack), removed: make(map[int]bool), prs: make(map[int]*gh.PRInfo)}
+}
+
+func (s *previewService) GetPR(number int) (*gh.PRInfo, error) {
+	if pr := s.prs[number]; pr != nil {
+		copy := *pr
+		return &copy, nil
+	}
+	return s.Service.GetPR(number)
 }
 
 func (s *previewService) LookupPRsByBranch(branches []string) (map[string]*gh.PRInfo, error) {
@@ -70,7 +79,9 @@ func (s *previewService) CreatePR(head, base, title, body string, draft bool) (*
 	number := s.nextPR
 	s.nextPR--
 	_, _ = fmt.Fprintf(s.w, "  CREATE PR #%d (placeholder) head=%q base=%q draft=%t\n    title: %s\n    body:\n%s\n", number, head, base, draft, title, body)
-	return &gh.PRInfo{Number: number, State: "OPEN", HeadRefName: head, BaseRefName: base, Title: title, Body: body, IsDraft: draft}, nil
+	pr := &gh.PRInfo{Number: number, State: "OPEN", HeadRefName: head, BaseRefName: base, Title: title, Body: body, IsDraft: draft}
+	s.prs[number] = pr
+	return pr, nil
 }
 
 func (s *previewService) UpdatePR(number int, opts gh.UpdatePROpts) error {

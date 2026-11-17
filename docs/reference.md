@@ -29,6 +29,7 @@ Global flags:
 | `--exclude-bookmarks` | | `normal_target.immutable()` | Boolean jj bookmark-template expression selecting bookmarks that must not be used |
 | `--upstream` | `-u` | | Upstream remote name or URL (where PRs are opened). Bare `--upstream` means the `upstream` remote; pass a value with `=` (`--upstream=fork`) |
 | `--dry-run` | `-n` | | Show what would happen without making changes |
+| `--overwrite-pr-body` | | | Overwrite PR bodies with broken markers or legacy jip bodies; does not bypass code or bookmark safety checks |
 | `--reviewer` | `-r` | | Add reviewers (repeatable, comma-separated) |
 | `--draft` | `-d` | | Create PRs as drafts |
 | `--existing` | `-x` | | Only update PRs that already exist (skip new ones) |
@@ -42,6 +43,64 @@ Global flags:
 | `--no-diff-since-jip` | | | Diff against the current remote head, ignoring a configured `diff-since-jip` |
 | `--no-upstream` | | | Open PRs on the push remote, ignoring a configured `upstream` |
 | `--no-reviewer` | | | Don't request reviewers, ignoring a configured `reviewer` |
+
+## PR body ownership and templates
+
+jip always sets PR titles from the commit subject, including PRs opened by
+someone else. The commit body and generated navigation go inside one section:
+
+```html
+<!-- jip:begin (generated from the commit message; edits here are overwritten) -->
+
+Generated navigation and commit body
+
+<!-- jip:pushed-commit=<hash> -->
+
+<!-- jip:end -->
+```
+
+The section is appended at the bottom when first added. Later sends replace
+only that section. Text before **and after** a valid section is preserved
+byte-for-byte. Keep checklists and GitHub-only notes outside the section.
+Standalone PRs and all stacking modes use the same ownership boundary.
+Do not put reserved jip comments in templates or commit bodies, except as
+examples inside fenced code blocks.
+Close all Markdown code fences before sending. An unclosed fence can hide
+section markers, so jip treats it as a body conflict. Preserve is not possible
+until the fence is closed; Overwrite, Skip, and Abort remain available.
+
+For a new PR, jip reads `pull_request_template.md` (case-insensitive filename)
+from the configured committed stack base, not the working copy. The search
+order is `.github/`, repository root, then `docs/`. Template directories are
+ignored. Multiple filename case variants in the selected directory are an
+error. The template is outside the owned section and is applied only once.
+Forks use the stack base on the named upstream remote; URL-only upstreams
+must be changed to a named remote to create PRs. Missing templates are allowed;
+an unavailable revision or a template read error stops the send before pushing.
+
+Broken, duplicate, or misordered section markers and legacy jip bodies require
+a decision before pushing. A legacy body has a pushed-commit marker or an old
+generated review link, but no section boundary. In a terminal, choose:
+
+- **Preserve:** keep the old text, remove recognized jip metadata comments, and
+  append a new section. Old descriptions and navigation can remain duplicated.
+- **Overwrite:** replace the whole description with a generated section.
+- **Skip:** skip this PR and its dependent changes. Independent changes proceed.
+  Skipped body conflicts cause a non-zero exit.
+- **Abort** (default): stop without pushing or changing PRs.
+
+Without a terminal, body conflicts stop the send with an error. Pass `--overwrite-pr-body`
+to choose Overwrite for these conflicts. This flag does not delete outside text
+around a valid section, and cannot be set in config. Dry runs do not prompt;
+use `--dry-run --overwrite-pr-body` to preview a conflicting-body replacement.
+
+jip reads the body again immediately before updating it. A new conflict leaves
+the body unchanged and reports that the code was already pushed. An earlier
+decision, including `--overwrite-pr-body`, does not authorize overwriting later edits.
+There is still a small interval between the final read and write in which a
+concurrent edit can be lost. Updates whose bodies are unchanged are not sent.
+Commit records for `--diff-since-jip` are read only inside a valid section;
+legacy bodies remain readable until migration. Broken sections are not trusted.
 
 ## Configuration files
 
@@ -252,7 +311,8 @@ must be enrolled via <https://gh.io/stacksbeta>). Each PR targets the branch
 of the change below it, and jip links the PRs into a native GitHub stack via
 the Stacks API — the same thing `gh stack link` does, without needing the `gh`
 CLI. GitHub's own UI then provides stack navigation, atomic merge-down, and
-server-side rebasing, so jip leaves PR descriptions as plain commit messages.
+server-side rebasing, so jip puts the commit message body in the owned section
+without adding stack navigation.
 
 ```bash
 jip send --stack=gh-native      # or set stack = "gh-native" in .jip.toml

@@ -111,6 +111,17 @@ func newMockService() *mockService {
 func (m *mockService) Owner() string { return m.owner }
 func (m *mockService) Repo() string  { return m.repo }
 
+func (m *mockService) GetPR(number int) (*gh.PRInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pr := m.prs[number]
+	if pr == nil {
+		return nil, fmt.Errorf("PR #%d not found", number)
+	}
+	copy := *pr
+	return &copy, nil
+}
+
 func (m *mockService) GetAuthenticatedUser() (string, error) {
 	return "testuser", nil
 }
@@ -178,7 +189,8 @@ func (m *mockService) LookupPRsByBranch(branches []string) (map[string]*gh.PRInf
 	for _, branch := range branches {
 		for _, pr := range m.prs {
 			if pr.HeadRefName == branch && pr.State == "OPEN" {
-				result[branch] = pr
+				copy := *pr
+				result[branch] = &copy
 				break
 			}
 		}
@@ -985,7 +997,7 @@ func TestIntegration_SendDiffSinceJipUsesRecordedBase(t *testing.T) {
 	// Simulate desync: the PR's recorded jip push is still commit1 even though
 	// the remote head is now commit2.
 	mock.mu.Lock()
-	mock.prs[prNumber].Body = gh.WithPushedCommitMarker("feat: add f", commit1)
+	mock.prs[prNumber].Body, _ = gh.MergePRBody("", gh.WithPushedCommitMarker("feat: add f", commit1), "")
 	mock.comments[prNumber] = nil
 	mock.mu.Unlock()
 
@@ -1045,7 +1057,7 @@ func TestIntegration_SendDiffSinceJipCommitNotLocal(t *testing.T) {
 	}
 	// Record a commit that does not exist in the local repo.
 	missing := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-	mock.prs[prNumber].Body = gh.WithPushedCommitMarker("feat: add f", missing)
+	mock.prs[prNumber].Body, _ = gh.MergePRBody("", gh.WithPushedCommitMarker("feat: add f", missing), "")
 	mock.comments[prNumber] = nil
 	mock.mu.Unlock()
 
@@ -1225,7 +1237,7 @@ func TestIntegration_SendFetchesUpstreamRemote(t *testing.T) {
 	_ = remoteDir // used by initTestRepoWithRemote cleanup
 }
 
-func TestIntegration_SendSkipsFetchForUpstreamURL(t *testing.T) {
+func TestIntegration_SendTemplateRequiresNamedUpstream(t *testing.T) {
 	checkJJ(t)
 
 	mock := newMockService()
@@ -1243,8 +1255,8 @@ func TestIntegration_SendSkipsFetchForUpstreamURL(t *testing.T) {
 		pushOwner: "myuser",
 		revsets:   []string{"@-"},
 	}, &buf)
-	if err != nil {
-		t.Fatalf("send failed: %v\nOutput:\n%s", err, buf.String())
+	if err == nil || !strings.Contains(err.Error(), "local upstream remote") {
+		t.Fatalf("expected actionable template lookup error, got %v", err)
 	}
 
 	// Should only fetch origin, not the URL.

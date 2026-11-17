@@ -9,6 +9,26 @@ import (
 	"testing"
 )
 
+func TestGetPR(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v3/repos/owner/repo/pulls/42", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 42, "state": "open", "title": "title", "body": "fresh body", "draft": true,
+			"html_url": "https://github.com/owner/repo/pull/42",
+			"head":     map[string]any{"ref": "feature"}, "base": map[string]any{"ref": "main"},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	pr, err := newTestClient(t, server, "owner", "repo").GetPR(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 42 || pr.Body != "fresh body" || pr.Title != "title" || pr.HeadRefName != "feature" || pr.BaseRefName != "main" || !pr.IsDraft {
+		t.Fatalf("unexpected PR: %+v", pr)
+	}
+}
+
 func TestCreatePR(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v3/repos/owner/repo/pulls", func(w http.ResponseWriter, r *http.Request) {

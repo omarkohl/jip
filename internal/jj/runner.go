@@ -41,6 +41,9 @@ const bookmarkListTemplate = "" +
 
 // Runner executes jj commands and returns their output.
 type Runner interface {
+	// PRTemplate reads the PR template at a committed base revision.
+	PRTemplate(revision string) (string, error)
+
 	// Log runs jj log with the given revset and returns raw JSONL output.
 	Log(revset string) ([]byte, error)
 

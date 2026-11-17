@@ -14,6 +14,7 @@ import (
 	"github.com/omarkohl/jip/internal/jj"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"golang.org/x/term"
 )
 
 var sendCmd = &cobra.Command{
@@ -41,6 +42,7 @@ func init() {
 	sendCmd.Flags().StringP("upstream", "u", "", "Upstream remote name or URL (use --upstream=value); bare --upstream means the \"upstream\" remote")
 	sendCmd.Flags().Lookup("upstream").NoOptDefVal = "upstream"
 	sendCmd.Flags().BoolP("dry-run", "n", false, "Show what would happen without making changes")
+	sendCmd.Flags().Bool("overwrite-pr-body", false, "Overwrite conflicting PR bodies (not code or bookmark conflicts)")
 	sendCmd.Flags().StringSliceP("reviewer", "r", nil, "Add reviewers (repeatable, comma-separated)")
 	sendCmd.Flags().BoolP("draft", "d", false, "Create PRs as drafts")
 	sendCmd.Flags().BoolP("existing", "x", false, "Only update PRs that already exist (skip new ones)")
@@ -190,6 +192,8 @@ func resolveStackMode(stack string, stackSet, noStack, noStackOnCLI bool) (strin
 
 // sendOpts holds configuration for the send pipeline.
 type sendOpts struct {
+	overwritePRBody  bool
+	resolveBody      bodyConflictResolver
 	bookmarkPolicy   string
 	excludeBookmarks string
 	base             string
@@ -216,11 +220,13 @@ type skippedEntry struct {
 
 // changeState tracks the state of each change through the send pipeline.
 type changeState struct {
-	change   *jj.Change
-	bookmark jj.ChangeBookmark
-	pr       *gh.PRInfo // nil if no existing PR
-	isNew    bool       // true if PR was just created
-	changed  bool       // true if existing PR was modified (title, body, or interdiff)
+	bodyResolution gh.BodyResolution
+	bodyBeforePush string
+	change         *jj.Change
+	bookmark       jj.ChangeBookmark
+	pr             *gh.PRInfo // nil if no existing PR
+	isNew          bool       // true if PR was just created
+	changed        bool       // true if existing PR was modified (title, body, or interdiff)
 }
 
 // skipReason records why a change was skipped during send.
@@ -266,6 +272,11 @@ func runSend(cmd *cobra.Command, args []string) error {
 	bookmarkPolicy, _ := cmd.Flags().GetString("bookmark-policy")
 	excludeBookmarks, _ := cmd.Flags().GetString("exclude-bookmarks")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	overwritePRBody, _ := cmd.Flags().GetBool("overwrite-pr-body")
+	var resolveBody bodyConflictResolver
+	if input, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(input.Fd())) {
+		resolveBody = promptBodyConflict(input, cmd.OutOrStdout())
+	}
 	reviewers, _ := cmd.Flags().GetStringSlice("reviewer")
 	// Trim whitespace from each reviewer (e.g. "-r alice, bob").
 	var cleanReviewers []string
@@ -359,6 +370,8 @@ func runSend(cmd *cobra.Command, args []string) error {
 	}
 
 	return executeSend(runner, client, sendOpts{
+		overwritePRBody:  overwritePRBody,
+		resolveBody:      resolveBody,
 		bookmarkPolicy:   bookmarkPolicy,
 		excludeBookmarks: excludeBookmarks,
 		base:             base,
@@ -774,6 +787,52 @@ func executeFetchedSend(runner jj.Runner, client gh.Service, opts sendOpts, w io
 		return executeFetchedSend(runner, client, opts, w, named)
 	}
 
+	// Resolve uncertain body ownership before any push or PR mutation.
+	var ready []changeState
+	for _, s := range activeStates {
+		var skippedParent string
+		for _, pid := range s.change.ParentIDs {
+			if _, ok := skippedIDs[pid]; ok {
+				skippedParent = pid
+				break
+			}
+		}
+		if skippedParent != "" {
+			skippedIDs[s.change.ChangeID] = skipReason{reason: "skipped because ancestor was skipped", ancestor: skippedParent}
+			skippedStates = append(skippedStates, s)
+			continue
+		}
+		if err := gh.ValidatePRContent(s.change.Body()); err != nil {
+			return fmt.Errorf("change %.12s: %w", s.change.ChangeID, err)
+		}
+		if s.pr != nil {
+			s.bodyBeforePush = s.pr.Body
+			if err := resolveBodyConflict(&s, opts); err != nil {
+				return err
+			}
+			if s.bodyResolution == gh.BodySkip {
+				skippedIDs[s.change.ChangeID] = skipReason{reason: "PR body conflict: skipped by user"}
+				skippedStates = append(skippedStates, s)
+				continue
+			}
+			if _, err := gh.MergePRBody(s.pr.Body, "", s.bodyResolution); err != nil {
+				return fmt.Errorf("PR #%d body: %w", s.pr.Number, err)
+			}
+		}
+		ready = append(ready, s)
+	}
+	activeStates = ready
+	var template string
+	for _, s := range activeStates {
+		if s.pr == nil {
+			template, err = sendTemplate(runner, opts, baseBranch)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+
 	// 7. gh-native: inspect the stacks the existing PRs belong to, and dissolve
 	// any that the append-only stacks API can no longer express (reorders,
 	// mid-stack inserts/removals, base changes) before any PR base is touched.
@@ -920,11 +979,16 @@ func executeFetchedSend(runner jj.Runner, client gh.Service, opts sendOpts, w io
 				if opts.pushOwner != "" {
 					head = opts.pushOwner + ":" + head
 				}
-				pr, err := client.CreatePR(head, desiredBase[s.change.ChangeID], title, s.change.Body(), opts.draft)
+				initialBody, err := gh.MergePRBody(template, gh.WithPushedCommitMarker(s.change.Body(), s.change.CommitID), "")
+				if err != nil {
+					return err
+				}
+				pr, err := client.CreatePR(head, desiredBase[s.change.ChangeID], title, initialBody, opts.draft)
 				if err != nil {
 					return fmt.Errorf("creating PR for %s: %w", s.change.ChangeID, err)
 				}
 				s.pr = pr
+				s.bodyBeforePush = initialBody
 				s.isNew = true
 
 				if len(opts.reviewers) > 0 {
@@ -955,7 +1019,8 @@ func executeFetchedSend(runner jj.Runner, client gh.Service, opts sendOpts, w io
 		if bodyNav {
 			perChangeStack = computeStackPRs(activeStates)
 		}
-		for i, s := range activeStates {
+		for i := range activeStates {
+			s := &activeStates[i]
 			body := s.change.Body()
 			if bodyNav {
 				body = gh.BuildStackedPRBody(
@@ -967,11 +1032,8 @@ func executeFetchedSend(runner jj.Runner, client gh.Service, opts sendOpts, w io
 				)
 			}
 			body = gh.WithPushedCommitMarker(body, s.change.CommitID)
-			if body != s.pr.Body {
-				if err := client.UpdatePR(s.pr.Number, gh.UpdatePROpts{Body: &body}); err != nil {
-					return fmt.Errorf("updating PR #%d body: %w", s.pr.Number, err)
-				}
-				activeStates[i].changed = true
+			if err := updateOwnedBody(client, s, body); err != nil {
+				return err
 			}
 		}
 
