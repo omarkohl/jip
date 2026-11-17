@@ -335,6 +335,25 @@ no stack navigation in the description.
 
 ![A single-commit PR with no stack navigation](images/independent-pr.png)
 
+### What does jip overwrite on GitHub?
+
+jip replaces the PR title from the commit subject on every send, including
+PRs opened by someone else. It replaces only the generated section between
+`jip:begin` and `jip:end` in the description. Put checklists and manual notes
+outside that section. Text on either side survives later sends.
+
+New PRs get the repository's single-file PR template from the committed stack
+base, if present. Existing manually opened PRs keep their descriptions and get
+a generated section appended. Templates are not added to existing PRs.
+
+Older jip bodies have no ownership boundary. jip asks how to migrate them;
+it also asks when section markers are broken. Choose Preserve, Overwrite,
+Skip, or Abort. Preserve can leave duplicate descriptions or old navigation.
+Abort is the default. In scripts, conflicts fail unless `--overwrite-pr-body` is passed
+to overwrite the whole conflicting description. That flag does not bypass
+code or bookmark conflicts. See [body ownership](reference.md#pr-body-ownership-and-templates)
+for details, including concurrent edits and template lookup.
+
 ### What happens if my stack has private, WIP, or conflicted commits?
 
 jip skips them automatically, along with anything stacked on top (a PR can't

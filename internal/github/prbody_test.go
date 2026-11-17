@@ -76,6 +76,17 @@ func TestWithPushedCommitMarker_UpdateStripsOldMarker(t *testing.T) {
 	}
 }
 
+func TestWithPushedCommitMarker_PreservesExamples(t *testing.T) {
+	example := "Example:\n\n```html\n<!-- jip:pushed-commit=aaaaaaa -->\n```"
+	body := WithPushedCommitMarker(example, "bbbbbbb")
+	if !strings.HasPrefix(body, example+"\n\n") {
+		t.Fatalf("example changed: %q", body)
+	}
+	if got := ParsePushedCommit(body); got != "bbbbbbb" {
+		t.Fatalf("pushed commit = %q", got)
+	}
+}
+
 func TestWithPushedCommitMarker_StripsMultipleOldMarkers(t *testing.T) {
 	// Simulate a body that accumulated markers from previous (pre-fix) sends.
 	body := "desc\n\n" + pushedCommitMarkerPrefix + "aaaaaaa -->\n\n" + pushedCommitMarkerPrefix + "bbbbbbb -->"
@@ -197,7 +208,7 @@ func TestBuildStackedPRBody_WithStack(t *testing.T) {
 	if !strings.Contains(body, "## Description") {
 		t.Errorf("expected '## Description' heading before commit body in stacked PR, got:\n%s", body)
 	}
-	if !strings.Contains(body, "[^1]:") {
+	if !strings.Contains(body, "[^jip-stack]:") {
 		t.Error("expected footnote")
 	}
 	if strings.Contains(body, "Managed by") {

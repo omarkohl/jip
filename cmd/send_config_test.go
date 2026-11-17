@@ -84,6 +84,25 @@ func TestApplySendConfig_UnknownKey(t *testing.T) {
 	}
 }
 
+func TestApplySendConfig_OverwritePRBodyCannotBeConfigured(t *testing.T) {
+	flags := newSendFlags()
+	if err := applySendConfig(flags, map[string]string{"overwrite-pr-body": "true"}); err == nil {
+		t.Fatal("overwrite-pr-body must require an explicit CLI flag")
+	}
+	if err := flags.Parse([]string{"--overwrite-pr-body"}); err != nil {
+		t.Fatal(err)
+	}
+	if overwrite, _ := flags.GetBool("overwrite-pr-body"); !overwrite {
+		t.Fatal("--overwrite-pr-body was not parsed")
+	}
+}
+
+func TestSendRejectsGenericForceFlag(t *testing.T) {
+	if err := newSendFlags().Parse([]string{"--force"}); err == nil {
+		t.Fatal("generic --force flag must not be accepted")
+	}
+}
+
 func TestApplySendConfig_InvalidValue(t *testing.T) {
 	flags := newSendFlags()
 	err := applySendConfig(flags, map[string]string{"rebase": "yes"})

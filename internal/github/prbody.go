@@ -42,41 +42,37 @@ func WithPushedCommitMarker(body, commit string) string {
 // stripPushedCommitMarkers removes all pushed-commit markers (and the \n\n
 // separator that WithPushedCommitMarker prepends) from body.
 func stripPushedCommitMarkers(body string) string {
-	for {
-		idx := strings.Index(body, pushedCommitMarkerPrefix)
-		if idx == -1 {
-			break
+	var clean strings.Builder
+	cursor := 0
+	metadataLines(body, func(start, end int, kind string) {
+		if kind != "pushed-commit=" {
+			return
 		}
-		rest := body[idx+len(pushedCommitMarkerPrefix):]
-		end := strings.Index(rest, "-->")
-		if end == -1 {
-			break
+		if start >= cursor+2 && body[start-2:start] == "\n\n" {
+			start -= 2
 		}
-		markerEnd := idx + len(pushedCommitMarkerPrefix) + end + len("-->")
-		markerStart := idx
-		if markerStart >= 2 && body[markerStart-2:markerStart] == "\n\n" {
-			markerStart -= 2
-		}
-		body = body[:markerStart] + body[markerEnd:]
-	}
-	return body
+		clean.WriteString(body[cursor:start])
+		cursor = end
+	})
+	clean.WriteString(body[cursor:])
+	return clean.String()
 }
 
 // ParsePushedCommit extracts the commit hash from a jip pushed-commit marker
 // in a PR body, or "" if the body has no marker or the value is not a valid
-// hex hash. Uses LastIndex so that if multiple markers exist the newest one
-// wins.
+// hex hash. If multiple markers exist, the last one outside a code fence wins.
 func ParsePushedCommit(commentBody string) string {
-	idx := strings.LastIndex(commentBody, pushedCommitMarkerPrefix)
-	if idx == -1 {
+	commentBody = recordedBody(commentBody)
+	marker := ""
+	metadataLines(commentBody, func(start, end int, kind string) {
+		if kind == "pushed-commit=" {
+			marker = strings.TrimSpace(commentBody[start:end])
+		}
+	})
+	if marker == "" || !strings.HasSuffix(marker, " -->") {
 		return ""
 	}
-	rest := commentBody[idx+len(pushedCommitMarkerPrefix):]
-	end := strings.Index(rest, "-->")
-	if end == -1 {
-		return ""
-	}
-	value := strings.TrimSpace(rest[:end])
+	value := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(marker, pushedCommitMarkerPrefix), " -->"))
 	if len(value) < 7 {
 		return ""
 	}
@@ -96,16 +92,26 @@ func ParsePushedCommit(commentBody string) string {
 // hash is extracted from the exact /pull/<number>/commits/<hash> URL shape to
 // avoid matching unrelated URLs in user-written descriptions.
 func ParseReviewCommit(prBody string) string {
+	return parseReviewCommit(recordedBody(prBody))
+}
+
+func parseReviewCommit(prBody string) string {
+	var commit string
+	unfencedLines(prBody, func(start, end int) {
+		if commit == "" {
+			commit = parseReviewCommitLine(prBody[start:end])
+		}
+	})
+	return commit
+}
+
+func parseReviewCommitLine(line string) string {
 	const lineMarker = "Only review commit "
-	idx := strings.Index(prBody, lineMarker)
+	idx := strings.Index(line, lineMarker)
 	if idx == -1 {
 		return ""
 	}
-	// Restrict search to the single line that contains the marker.
-	line := prBody[idx:]
-	if nl := strings.IndexByte(line, '\n'); nl != -1 {
-		line = line[:nl]
-	}
+	line = line[idx:]
 	const urlMarker = "/commits/"
 	ci := strings.Index(line, urlMarker)
 	if ci == -1 {
@@ -164,7 +170,7 @@ func BuildStackedPRBody(commitHash, repoFullName string, prNumber int, allPRs []
 	commitLink := fmt.Sprintf("https://github.com/%s/pull/%d/commits/%s", repoFullName, prNumber, commitHash)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "This is a stacked PR[^1]. Only review commit [%s](%s).\n\n", shortHash, commitLink)
+	fmt.Fprintf(&b, "This is a stacked PR[^jip-stack]. Only review commit [%s](%s).\n\n", shortHash, commitLink)
 
 	b.WriteString(BuildStackBlock(allPRs, prNumber))
 
@@ -174,7 +180,7 @@ func BuildStackedPRBody(commitHash, repoFullName string, prNumber int, allPRs []
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n[^1]: A stacked PR is a pull request that depends on other pull requests. ")
+	b.WriteString("\n[^jip-stack]: A stacked PR is a pull request that depends on other pull requests. ")
 	b.WriteString("The current PR depends on the ones listed below it and MUST NOT be merged before they are merged. ")
 	b.WriteString("The PRs listed above the current one in turn depend on it and won't be merged until the current one is. ")
 	b.WriteString("Learn more about [why](https://github.com/omarkohl/jip/blob/main/docs/why.md) and [how to review](https://github.com/omarkohl/jip/blob/main/docs/reviewing.md).\n")

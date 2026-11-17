@@ -3,6 +3,17 @@
 This guide is for **maintainers and reviewers** who receive stacked PRs
 created by jip. You don't need jip or jj installed to review them.
 
+## Editing the PR description
+
+Keep checklists and review notes outside the section marked `jip:begin` and
+`jip:end`. jip preserves text before and after that section on later sends.
+Edits inside the section are replaced from the commit message. PR titles are
+also replaced from the commit subject, even if someone else opened the PR.
+
+If markers are broken, jip requires a decision before pushing. Do not use
+`jip send --overwrite-pr-body` unless you intend to replace the whole conflicting description.
+See [body ownership and migration](reference.md#pr-body-ownership-and-templates).
+
 ## What a stacked PR looks like
 
 Each PR in a stack has a description listing all PRs with the current one

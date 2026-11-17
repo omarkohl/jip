@@ -13,6 +13,7 @@ import (
 
 // Service defines the GitHub operations needed by the send pipeline.
 type Service interface {
+	GetPR(number int) (*PRInfo, error)
 	CreatePR(head, base, title, body string, draft bool) (*PRInfo, error)
 	UpdatePR(number int, opts UpdatePROpts) error
 	CommentOnPR(number int, body string) error
@@ -28,6 +29,24 @@ type Service interface {
 	CreateStack(prNumbers []int) (*Stack, error)
 	AddToStack(stackNumber int, prNumbers []int) (*Stack, error)
 	Unstack(stackNumber int) (dissolved bool, err error)
+}
+
+// GetPR reads a fresh body immediately before an owned-section update.
+func (c *Client) GetPR(number int) (*PRInfo, error) {
+	var pr *gogithub.PullRequest
+	err := retry.Do(func() error {
+		var err error
+		pr, _, err = c.gh.PullRequests.Get(context.Background(), c.owner, c.repo, number)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading PR #%d: %w", number, err)
+	}
+	return &PRInfo{
+		Number: pr.GetNumber(), State: pr.GetState(), URL: pr.GetHTMLURL(),
+		Title: pr.GetTitle(), Body: pr.GetBody(), HeadRefName: pr.GetHead().GetRef(),
+		BaseRefName: pr.GetBase().GetRef(), IsDraft: pr.GetDraft(),
+	}, nil
 }
 
 // Client wraps go-github for PR mutations and GraphQL queries.
